@@ -47,13 +47,12 @@
 - [x] OpenCode configuration
 - [x] `AGENTS.md` — project rules for AI agents
 - [x] `master SPEC.md` — source of truth specification
-- [ ] AI agents setup
-- [ ] Custom commands
-- [ ] Skills configuration
-- [ ] Monorepo/tooling (workspace setup)
-- [ ] Docker base images
-- [ ] Basic CI pipeline
-- [ ] Definition of Done
+- [x] AI agents setup
+- [x] Custom commands
+- [x] Monorepo/tooling (workspace setup)
+- [x] Docker base images
+- [x] Basic CI pipeline
+- [x] Definition of Done
 
 ---
 
