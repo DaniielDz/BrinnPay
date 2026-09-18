@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: BrinnPay API
-  version: 1.0.0
+  version: 0.1.0
   description: |
     BrinnPay is a developer-focused payment infrastructure sandbox. It simulates
     payment infrastructure (payments, refunds, idempotency, webhooks, logs)
@@ -17,7 +17,7 @@ info:
 
     - Base path and versioning: `/api/v1` (ADR-0005). No breaking changes within
       a version; the version is pinned per request by the URL. `info.version` is
-      the OpenAPI document version (`1.0.0` = `v1` + document revision), not the
+      the OpenAPI document version (`0.1.0` = `v1` + document revision), not the
       product release (`v0.1.0`, roadmap Phase 26) — see `api-conventions.md`.
     - Naming: plural nouns (`/customers`, `/payments`); nested resources where
       ownership is strict (`/payments/{payment_id}/refunds`); `snake_case` path
