@@ -1,0 +1,2884 @@
+openapi: 3.1.0
+
+info:
+  title: BrinnPay API
+  version: 1.0.0
+  description: |
+    BrinnPay is a developer-focused payment infrastructure sandbox. It simulates
+    payment infrastructure (payments, refunds, idempotency, webhooks, logs)
+    without processing real money.
+
+    This document is the canonical, single source of truth for the BrinnPay `v1`
+    API surface — `docs/openapi.yaml` (phase 1 specification §13.2). It covers
+    the full MVP resource surface: authentication, organizations, projects,
+    API keys, customers, payments, refunds, webhooks, idempotency, and logs.
+
+    Conventions fixed here bind every endpoint-level phase:
+
+    - Base path and versioning: `/api/v1` (ADR-0005). No breaking changes within
+      a version; the version is pinned per request by the URL. `info.version` is
+      the OpenAPI document version (`1.0.0` = `v1` + document revision), not the
+      product release (`v0.1.0`, roadmap Phase 26) — see `api-conventions.md`.
+    - Naming: plural nouns (`/customers`, `/payments`); nested resources where
+      ownership is strict (`/payments/{payment_id}/refunds`); `snake_case` path
+      parameters, query parameters, and JSON fields.
+    - Authentication (ADR-0006, phase 1 §7.3): API access via
+      `Authorization: Bearer <api_key>` where the key is `sk_test_...` /
+      `sk_live_...`. Dashboard/user endpoints authenticate via session (JWT
+      access token). The two modes are **not equivalent** (API keys scope to one
+      project + environment; sessions scope to the user's memberships + RBAC)
+      and are documented and enforced separately per route; resource endpoints
+      (customers, payments, refunds, webhooks) accept either mode.
+    - Idempotency (ADR-0004): critical mutations (payment creation, refund
+      creation) accept the `Idempotency-Key` header. Key scope =
+      (project, operation_scope, key). Replay of the same key for the same
+      operation within the 24-hour retention window returns the original stored
+      response without re-executing the operation; a different operation scope
+      is an independent operation; after 24 hours the key is treated as a new
+      operation.
+    - Pagination (phase 1 §7.5): cursor-based. List endpoints accept `limit` and
+      `cursor`; responses include `next_cursor` (nullable) and `has_more`
+      metadata. Cursors are opaque to clients.
+    - Errors (phase 1 §7.6): consistent JSON error envelope with a stable
+      machine-readable `code`, `message`, `request_id`, and optional `details`.
+      HTTP status semantics: 400 validation, 401 unauthenticated, 403
+      forbidden, 404 not found, 409 conflict, 422 business rule violation, 429
+      rate limited, 5xx server.
+    - Request IDs (phase 1 §7.7): every request is assigned a request ID at
+      ingress and every response carries it in the `X-Request-Id` header.
+    - Time and format conventions (phase 1 §7.8): timestamps are UTC ISO 8601
+      (`YYYY-MM-DDTHH:MM:SS.sssZ`); entity IDs are UUIDv7 and must be treated as
+      opaque strings; monetary amounts are decimal strings paired with a
+      lowercase currency code (`usd` only in the MVP, ADR-0003).
+
+    Sources: master specification `.ai/SPEC.md`, phase 1 specification
+    (`.ai/phases/phase-01-architecture-mvp-spec.md`), ADRs 0001–0010.
+
+servers:
+  - url: /api/v1
+    description: |
+      Versioned API prefix (ADR-0005). Deployments replace this with the
+      environment-specific base URL; the `/api/v1` prefix is preserved.
+
+tags:
+  - name: auth
+    description: User registration, login, session tokens, and current user (Phase 3).
+  - name: organizations
+    description: Organization (tenant) management, membership, and invitations (Phase 4).
+  - name: projects
+    description: Project management within an organization (Phase 5).
+  - name: api-keys
+    description: API key management per project environment (Phase 5).
+  - name: customers
+    description: Developer customer records (Phase 6).
+  - name: payments
+    description: Simulated payment operations (Phase 7).
+  - name: refunds
+    description: Full and partial refunds against payments (Phase 9).
+  - name: webhooks
+    description: Webhook endpoints, events, and deliveries (Phase 10).
+  - name: logs
+    description: Request logs and audit logs (Phases 11–12).
+
+security: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: auth.register
+      summary: Register a user account
+      description: |
+        Creates a user account and establishes a session. A personal/default
+        organization is created automatically during onboarding (ADR-0010). The
+        refresh token is set as an `HttpOnly` cookie; it is never returned in
+        the JSON body (phase 1 §11.5).
+      security: []
+      requestBody:
+        $ref: "#/components/requestBodies/RegisterBody"
+      responses:
+        "201":
+          description: Account created and session established.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: auth.login
+      summary: Log in with email and password
+      description: |
+        Authenticates a user and issues a short-lived JWT access token. The
+        refresh session is created and its token is set as an `HttpOnly` cookie;
+        it is never returned in the JSON body (phase 1 §11.5).
+      security: []
+      requestBody:
+        $ref: "#/components/requestBodies/LoginBody"
+      responses:
+        "200":
+          description: Authentication successful.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: auth.refresh
+      summary: Refresh an access token
+      description: |
+        Exchanges the refresh session (sent as the `HttpOnly` cookie) for a new
+        access token. Refresh sessions are revocable; invalid or revoked
+        sessions are rejected. Rotation/refresh details are refined in Phase 3.
+      security: []
+      responses:
+        "200":
+          description: New access token issued.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookie"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: auth.logout
+      summary: Log out and revoke the refresh session
+      description: |
+        Revokes the refresh session identified by the `HttpOnly` cookie and
+        clears the cookie, terminating the session.
+      security: []
+      responses:
+        "204":
+          description: Session revoked and cookie cleared.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+            Set-Cookie:
+              $ref: "#/components/headers/RefreshTokenCookieCleared"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: auth.me
+      summary: Retrieve the current user
+      description: Returns the profile of the authenticated session user.
+      security:
+        - SessionAuth: []
+      responses:
+        "200":
+          description: Current user profile.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations:
+    get:
+      tags: [organizations]
+      operationId: organizations.list
+      summary: List organizations
+      description: |
+        Lists the organizations the authenticated user belongs to. Cursor
+        pagination applies (phase 1 §7.5).
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated organization list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [organizations]
+      operationId: organizations.create
+      summary: Create an organization
+      description: Creates a new organization with the authenticated user as owner.
+      security:
+        - SessionAuth: []
+      requestBody:
+        $ref: "#/components/requestBodies/OrganizationCreateBody"
+      responses:
+        "201":
+          description: Organization created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations/{organization_id}:
+    get:
+      tags: [organizations]
+      operationId: organizations.retrieve
+      summary: Retrieve an organization
+      description: |
+        Returns an organization. Access is limited to members of the
+        organization (tenant isolation, phase 1 §6.4).
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "200":
+          description: Organization details.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      tags: [organizations]
+      operationId: organizations.update
+      summary: Update an organization
+      description: |
+        Updates organization attributes. Requires an administrative role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        $ref: "#/components/requestBodies/OrganizationUpdateBody"
+      responses:
+        "200":
+          description: Updated organization.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [organizations]
+      operationId: organizations.delete
+      summary: Delete an organization
+      description: |
+        Deletes an organization and its tenant-scoped data. Requires an
+        administrative role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      responses:
+        "204":
+          description: Organization deleted.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations/{organization_id}/members:
+    get:
+      tags: [organizations]
+      operationId: organizations.listMembers
+      summary: List organization members
+      description: |
+        Lists the members of an organization with their roles. Access is
+        limited to organization members. Cursor pagination applies.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated member list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMemberList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations/{organization_id}/members/{user_id}:
+    patch:
+      tags: [organizations]
+      operationId: organizations.updateMember
+      summary: Update a member role
+      description: |
+        Changes the role of an organization member. Requires an administrative
+        role; role changes are enforced per phase 1 §6.4.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        $ref: "#/components/requestBodies/OrganizationMemberUpdateBody"
+      responses:
+        "200":
+          description: Updated member.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [organizations]
+      operationId: organizations.removeMember
+      summary: Remove an organization member
+      description: |
+        Removes a member from the organization. Requires an administrative role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "204":
+          description: Member removed.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations/{organization_id}/invitations:
+    get:
+      tags: [organizations]
+      operationId: organizations.listInvitations
+      summary: List organization invitations
+      description: |
+        Lists pending and historical invitations of an organization. Requires an
+        administrative role. Cursor pagination applies.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated invitation list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvitationList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [organizations]
+      operationId: organizations.createInvitation
+      summary: Invite a user to an organization
+      description: |
+        Creates a pending membership invitation for an email address. Requires an
+        administrative role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+      requestBody:
+        $ref: "#/components/requestBodies/InvitationCreateBody"
+      responses:
+        "201":
+          description: Invitation created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations/{organization_id}/invitations/{invitation_id}:
+    delete:
+      tags: [organizations]
+      operationId: organizations.cancelInvitation
+      summary: Cancel an organization invitation
+      description: |
+        Revokes a pending invitation. Requires an administrative role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/InvitationId"
+      responses:
+        "204":
+          description: Invitation canceled.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /invitations/{invitation_id}/accept:
+    post:
+      tags: [organizations]
+      operationId: organizations.acceptInvitation
+      summary: Accept an organization invitation
+      description: |
+        Accepts a pending invitation for the authenticated user and adds them to
+        the organization with the invited role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/InvitationId"
+      responses:
+        "201":
+          description: Invitation accepted and membership created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationMember"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects:
+    get:
+      tags: [projects]
+      operationId: projects.list
+      summary: List projects
+      description: |
+        Lists projects of the organizations the authenticated user belongs to.
+        Cursor pagination applies.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated project list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [projects]
+      operationId: projects.create
+      summary: Create a project
+      description: |
+        Creates a project inside an organization. Projects support the TEST and
+        LIVE simulated environments (phase 1 §5.2).
+      security:
+        - SessionAuth: []
+      requestBody:
+        $ref: "#/components/requestBodies/ProjectCreateBody"
+      responses:
+        "201":
+          description: Project created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}:
+    get:
+      tags: [projects]
+      operationId: projects.retrieve
+      summary: Retrieve a project
+      description: |
+        Returns a project. Access requires membership in the owning organization
+        and project access within it (phase 1 §11.4).
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Project details.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      tags: [projects]
+      operationId: projects.update
+      summary: Update a project
+      description: |
+        Updates project attributes. Requires an administrative role in the
+        owning organization.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        $ref: "#/components/requestBodies/ProjectUpdateBody"
+      responses:
+        "200":
+          description: Updated project.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [projects]
+      operationId: projects.delete
+      summary: Delete a project
+      description: |
+        Deletes a project and its tenant-scoped data. Requires an administrative
+        role in the owning organization.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "204":
+          description: Project deleted.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/api-keys:
+    get:
+      tags: [api-keys]
+      operationId: apiKeys.list
+      summary: List API keys of a project
+      description: |
+        Lists the API keys of a project environment. Plaintext key material is
+        never returned (ADR-0006).
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated API key list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [api-keys]
+      operationId: apiKeys.create
+      summary: Create an API key
+      description: |
+        Creates an API key scoped to one project environment. The plaintext key
+        (`sk_test_...` / `sk_live_...`) is returned only once, at creation
+        (ADR-0006); only a hash is stored.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        $ref: "#/components/requestBodies/ApiKeyCreateBody"
+      responses:
+        "201":
+          description: API key created. The plaintext `key` is returned only here.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/api-keys/{api_key_id}:
+    delete:
+      tags: [api-keys]
+      operationId: apiKeys.revoke
+      summary: Revoke an API key
+      description: |
+        Revokes an API key. Revoked keys are rejected by API-key
+        authentication. Requires an administrative role.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ApiKeyId"
+      responses:
+        "204":
+          description: API key revoked.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/customers:
+    get:
+      tags: [customers]
+      operationId: customers.list
+      summary: List customers of a project
+      description: |
+        Lists the customers of a project environment with cursor pagination and
+        optional search. TEST and LIVE data is never mixed (phase 1 §8).
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Environment"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: Paginated customer list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [customers]
+      operationId: customers.create
+      summary: Create a customer
+      description: |
+        Creates a customer record in a project environment. With API-key
+        authentication the environment is derived from the key and must match
+        the payload; with session authentication it must be provided explicitly.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        $ref: "#/components/requestBodies/CustomerCreateBody"
+      responses:
+        "201":
+          description: Customer created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/customers/{customer_id}:
+    get:
+      tags: [customers]
+      operationId: customers.retrieve
+      summary: Retrieve a customer
+      description: Returns a customer record within its project and environment.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "200":
+          description: Customer details.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      tags: [customers]
+      operationId: customers.update
+      summary: Update a customer
+      description: |
+        Updates customer attributes. The environment of a customer is immutable
+        after creation.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CustomerId"
+      requestBody:
+        $ref: "#/components/requestBodies/CustomerUpdateBody"
+      responses:
+        "200":
+          description: Updated customer.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [customers]
+      operationId: customers.delete
+      summary: Delete a customer
+      description: Deletes a customer record. Behavior with linked payments is refined in Phase 7.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/CustomerId"
+      responses:
+        "204":
+          description: Customer deleted.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/payments:
+    get:
+      tags: [payments]
+      operationId: payments.list
+      summary: List payments of a project
+      description: |
+        Lists the simulated payments of a project environment with cursor
+        pagination. The payment state machine is refined in Phase 7.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Environment"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated payment list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [payments]
+      operationId: payments.create
+      summary: Create a payment
+      description: |
+        Creates a simulated payment in a project environment. This is a critical
+        mutation: it accepts the `Idempotency-Key` header with operation scope
+        `payments.create` (ADR-0004). With API-key authentication the environment
+        is derived from the key and must match the payload.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        $ref: "#/components/requestBodies/PaymentCreateBody"
+      responses:
+        "201":
+          description: Payment created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/payments/{payment_id}:
+    get:
+      tags: [payments]
+      operationId: payments.retrieve
+      summary: Retrieve a payment
+      description: Returns a simulated payment within its project and environment.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Payment details.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /payments/{payment_id}/refunds:
+    get:
+      tags: [refunds]
+      operationId: refunds.list
+      summary: List refunds of a payment
+      description: |
+        Lists the refunds issued against a payment with cursor pagination.
+        Refund rules are refined in Phase 9.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated refund list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefundList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [refunds]
+      operationId: refunds.create
+      summary: Create a refund
+      description: |
+        Creates a full or partial refund against a payment. This is a critical
+        mutation: it accepts the `Idempotency-Key` header with operation scope
+        `refunds.create` (ADR-0004). Partial refunds require an amount; omitting
+        the amount issues a full refund.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        $ref: "#/components/requestBodies/RefundCreateBody"
+      responses:
+        "201":
+          description: Refund created.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refund"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /payments/{payment_id}/refunds/{refund_id}:
+    get:
+      tags: [refunds]
+      operationId: refunds.retrieve
+      summary: Retrieve a refund
+      description: Returns a refund of a payment.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+        - $ref: "#/components/parameters/RefundId"
+      responses:
+        "200":
+          description: Refund details.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refund"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/webhook-endpoints:
+    get:
+      tags: [webhooks]
+      operationId: webhooks.listEndpoints
+      summary: List webhook endpoints of a project
+      description: |
+        Lists the registered webhook endpoints of a project environment with
+        cursor pagination. Delivery behavior is refined in Phase 10.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Environment"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated webhook endpoint list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      tags: [webhooks]
+      operationId: webhooks.createEndpoint
+      summary: Register a webhook endpoint
+      description: |
+        Registers a destination URL with an event subscription for a project
+        environment. The signing secret is returned only once, at creation; it is
+        used to verify HMAC-SHA256 signatures of outbound deliveries.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        $ref: "#/components/requestBodies/WebhookEndpointCreateBody"
+      responses:
+        "201":
+          description: Webhook endpoint created. The signing secret is returned only here.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/webhook-endpoints/{endpoint_id}:
+    get:
+      tags: [webhooks]
+      operationId: webhooks.retrieveEndpoint
+      summary: Retrieve a webhook endpoint
+      description: Returns a registered webhook endpoint. The signing secret is never returned.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EndpointId"
+      responses:
+        "200":
+          description: Webhook endpoint details.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpoint"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      tags: [webhooks]
+      operationId: webhooks.updateEndpoint
+      summary: Update a webhook endpoint
+      description: |
+        Updates the URL, event subscription, or enabled state of a webhook
+        endpoint.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EndpointId"
+      requestBody:
+        $ref: "#/components/requestBodies/WebhookEndpointUpdateBody"
+      responses:
+        "200":
+          description: Updated webhook endpoint.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpoint"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [webhooks]
+      operationId: webhooks.deleteEndpoint
+      summary: Delete a webhook endpoint
+      description: |
+        Deletes a webhook endpoint and stops deliveries to it. Requires an
+        administrative role.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EndpointId"
+      responses:
+        "204":
+          description: Webhook endpoint deleted.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/webhook-endpoints/{endpoint_id}/deliveries:
+    get:
+      tags: [webhooks]
+      operationId: webhooks.listDeliveries
+      summary: List deliveries of a webhook endpoint
+      description: |
+        Lists the delivery attempts of events to a webhook endpoint with cursor
+        pagination. Retry and replay semantics are refined in Phase 10.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EndpointId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated delivery list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookDeliveryList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/webhook-endpoints/{endpoint_id}/events/{event_id}/replay:
+    post:
+      tags: [webhooks]
+      operationId: webhooks.replayEvent
+      summary: Replay a webhook event to an endpoint
+      description: |
+        Re-creates a delivery of a previously emitted event to a webhook
+        endpoint. Requires an administrative role.
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/EndpointId"
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "202":
+          description: Replay accepted and queued for delivery.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/webhook-events:
+    get:
+      tags: [webhooks]
+      operationId: webhooks.listEvents
+      summary: List webhook events of a project
+      description: |
+        Lists the outbound events emitted in a project environment with cursor
+        pagination. Event payloads follow the outbound envelope (phase 1 §9.5).
+      security:
+        - ApiKeyAuth: []
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Environment"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated webhook event list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEventList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /projects/{project_id}/logs/requests:
+    get:
+      tags: [logs]
+      operationId: logs.listRequestLogs
+      summary: List request logs of a project
+      description: |
+        Lists the structured request/response records of a project with cursor
+        pagination (Phase 11). Request logs are API-wide records; this project
+        view returns only records scoped to the project. Non-project requests
+        (e.g. `/auth/*`) exist in the log store but are not exposed by this
+        project-scoped endpoint.
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/Environment"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated request log list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestLogList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /organizations/{organization_id}/logs/audit:
+    get:
+      tags: [logs]
+      operationId: logs.listAuditLogs
+      summary: List audit logs of an organization
+      description: |
+        Lists the immutable audit log entries of an organization with cursor
+        pagination (Phase 12).
+      security:
+        - SessionAuth: []
+      parameters:
+        - $ref: "#/components/parameters/OrganizationId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Paginated audit log list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogEntryList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sk_test_... | sk_live_...
+      description: |
+        API-key authentication for programmatic access (ADR-0006). The key is
+        sent as `Authorization: Bearer sk_test_...` (TEST) or
+        `Authorization: Bearer sk_live_...` (LIVE). A key is scoped to exactly
+        one project environment and can only act within that scope; it never
+        carries organization-management authority. Keys are shown once at
+        creation, stored hashed, and never logged.
+    SessionAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Session authentication with a short-lived JWT access token for
+        dashboard/user endpoints (phase 1 §7.3, §11.5). Tokens are obtained
+        through `/auth/login` and refreshed through `/auth/refresh` (refresh
+        token travels only as an `HttpOnly` cookie). Session requests are scoped
+        to the authenticated user's organization memberships and subject to RBAC.
+
+  headers:
+    X-Request-Id:
+      description: |
+        Request ID assigned to the request at ingress (phase 1 §7.7). Every
+        response carries it; it is propagated through logs, error responses, and
+        outbound webhook delivery records.
+      schema:
+        type: string
+        example: req_0192f2a0-0000-7000-8000-000000000001
+    RefreshTokenCookie:
+      description: |
+        Sets (or rotates) the refresh session token as an `HttpOnly` cookie
+        (phase 1 §11.5). Never readable by browser JavaScript. `Secure` in
+        secure/production environments; `SameSite` configured to minimize CSRF.
+        Exact lifetime/domain details are refined in Phase 3.
+      schema:
+        type: string
+        example: brinnpay_refresh=opaque_httpOnly_value; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Lax
+    RefreshTokenCookieCleared:
+      description: |
+        Clears the refresh session cookie on logout by setting an expired value
+        (phase 1 §11.5).
+      schema:
+        type: string
+        example: brinnpay_refresh=; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0
+
+  parameters:
+    OrganizationId:
+      name: organization_id
+      in: path
+      required: true
+      description: Organization UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-00000000000a
+    ProjectId:
+      name: project_id
+      in: path
+      required: true
+      description: Project UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-00000000000b
+    PaymentId:
+      name: payment_id
+      in: path
+      required: true
+      description: Payment UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000001
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      description: Customer UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000002
+    RefundId:
+      name: refund_id
+      in: path
+      required: true
+      description: Refund UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000003
+    ApiKeyId:
+      name: api_key_id
+      in: path
+      required: true
+      description: API key entity UUIDv7 ID, treated as an opaque string (ADR-0001). This is not the credential material.
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000004
+    EndpointId:
+      name: endpoint_id
+      in: path
+      required: true
+      description: Webhook endpoint UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000005
+    EventId:
+      name: event_id
+      in: path
+      required: true
+      description: Webhook event UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000006
+    InvitationId:
+      name: invitation_id
+      in: path
+      required: true
+      description: Invitation UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000007
+    UserId:
+      name: user_id
+      in: path
+      required: true
+      description: User UUIDv7 ID, treated as an opaque string (ADR-0001).
+      schema:
+        type: string
+        format: uuid
+        example: 0192f2a0-0000-7000-8000-000000000008
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of results per page (cursor pagination, phase 1 §7.5).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        Opaque cursor returned as `next_cursor` in the previous page. The server
+        derives cursors from the time-ordered entity IDs (UUIDv7, ADR-0001).
+        Clients must not decode cursors or reuse them across unrelated lists.
+      schema:
+        type: string
+    Search:
+      name: search
+      in: query
+      required: false
+      description: Free-text search across supported customer fields (refined in Phase 6).
+      schema:
+        type: string
+    Environment:
+      name: environment
+      in: query
+      required: false
+      description: |
+        Project environment filter (`test` or `live`). With session
+        authentication this selects the environment to operate on. With API-key
+        authentication the environment is derived from the key and must match.
+      schema:
+        $ref: "#/components/schemas/Environment"
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Idempotency key for critical mutations (phase 1 §7.4, ADR-0004). Key
+        scope = (project, operation_scope, key): replaying the same key for the
+        same operation within the 24-hour retention window returns the original
+        stored response without re-executing the operation; the same key against
+        a different operation scope is an independent operation; reuse after
+        expiry is treated as a new operation.
+      schema:
+        type: string
+
+  requestBodies:
+    RegisterBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RegisterRequest"
+    LoginBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/LoginRequest"
+    OrganizationCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OrganizationCreate"
+    OrganizationUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OrganizationUpdate"
+    OrganizationMemberUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OrganizationMemberUpdate"
+    InvitationCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/InvitationCreate"
+    ProjectCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProjectCreate"
+    ProjectUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProjectUpdate"
+    ApiKeyCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiKeyCreate"
+    CustomerCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CustomerCreate"
+    CustomerUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CustomerUpdate"
+    PaymentCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PaymentCreate"
+    RefundCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefundCreate"
+    WebhookEndpointCreateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WebhookEndpointCreate"
+    WebhookEndpointUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WebhookEndpointUpdate"
+
+  responses:
+    BadRequest:
+      description: Validation failed — the request is malformed or a field violates validation rules.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Unauthenticated:
+      description: Authentication is missing or invalid.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Forbidden:
+      description: The authenticated principal is not authorized for this operation (RBAC or tenant isolation).
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: The requested resource does not exist or is not visible to the caller.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Conflict:
+      description: The request conflicts with the current state of the resource (e.g., duplicate email, duplicate active key).
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    BusinessRuleViolation:
+      description: |
+        A domain/business rule was violated (e.g., refunding an already fully
+        refunded payment, `PAYMENT_ALREADY_REFUNDED`).
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    RateLimited:
+      description: The request exceeded an applicable rate limit.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    Environment:
+      type: string
+      enum: [test, live]
+      description: |
+        Project API environment (phase 1 §5.2). Both environments are simulated;
+        no real money is processed in either. TEST and LIVE data is never mixed.
+
+    Role:
+      type: string
+      enum: [owner, admin, member, viewer]
+      description: Organization membership role (phase 1 §4, §10).
+
+    MoneyAmount:
+      type: string
+      pattern: '^[0-9]+(\.[0-9]{1,2})?$'
+      description: |
+        Monetary amount as a decimal string in the currency's minor-unit scale
+        (ADR-0002). For USD two decimal places are supported, e.g. `"10.00"`.
+
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      description: |
+        Consistent JSON error envelope (phase 1 §7.6). `code` is a stable
+        machine-readable string (general codes such as `VALIDATION_ERROR`,
+        `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`,
+        plus business-specific codes such as `PAYMENT_ALREADY_REFUNDED`).
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: Stable, machine-readable error code.
+              example: PAYMENT_ALREADY_REFUNDED
+            message:
+              type: string
+              description: Human-readable error message. Never leaks internals, stack traces, or secrets.
+              example: This payment has already been fully refunded.
+            request_id:
+              type: string
+              description: Request ID assigned at ingress (phase 1 §7.7).
+              example: req_0192f2a0-0000-7000-8000-000000000001
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional structured information (e.g., validation field errors).
+
+    User:
+      type: object
+      required: [id, email, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7 ID, opaque to clients (ADR-0001).
+        email:
+          type: string
+          format: email
+        name:
+          type: [string, "null"]
+          description: Optional display name.
+        created_at:
+          type: string
+          format: date-time
+          description: UTC ISO 8601 timestamp.
+        updated_at:
+          type: string
+          format: date-time
+          description: UTC ISO 8601 timestamp.
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          description: Password. Stored only as a hash (Argon2id, the required/default algorithm — ADR-0007). Never logged or returned.
+        name:
+          type: string
+          description: Optional display name.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          description: The account password. Never logged.
+
+    AuthSession:
+      type: object
+      required: [access_token, token_type, expires_in, user]
+      description: |
+        Session created by register/login. The access token is short-lived and
+        held in memory by the web app. The refresh token is **not** returned in
+        JSON; it is set as an `HttpOnly` cookie on the response (phase 1 §11.5).
+      properties:
+        access_token:
+          type: string
+          description: JWT access token for session authentication.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Access token lifetime in seconds.
+        user:
+          $ref: "#/components/schemas/User"
+
+    AccessTokenResponse:
+      type: object
+      description: |
+        Newly issued short-lived access token. Any rotated refresh token is
+        delivered only via the `HttpOnly` cookie, never in this body
+        (phase 1 §11.5).
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: Newly issued JWT access token.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Access token lifetime in seconds.
+
+    Organization:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUIDv7 ID, opaque to clients (ADR-0001).
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OrganizationCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+
+    OrganizationUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+
+    OrganizationMember:
+      type: object
+      required: [id, organization_id, user_id, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organization_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/Role"
+        created_at:
+          type: string
+          format: date-time
+
+    OrganizationMemberUpdate:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+
+    Invitation:
+      type: object
+      required: [id, organization_id, email, role, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organization_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          $ref: "#/components/schemas/Role"
+        status:
+          type: string
+          enum: [pending, accepted, canceled]
+        created_at:
+          type: string
+          format: date-time
+
+    InvitationCreate:
+      type: object
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          $ref: "#/components/schemas/Role"
+
+    Project:
+      type: object
+      required: [id, organization_id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organization_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        environments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Environment"
+          description: |
+            The API environments available for the project. A project supports
+            both `test` and `live` by default; each environment-scoped resource
+            belongs to exactly one environment and TEST/LIVE data is never mixed
+            (phase 1 §5.2).
+
+    ProjectCreate:
+      type: object
+      required: [organization_id, name]
+      properties:
+        organization_id:
+          type: string
+          format: uuid
+          description: The organization that owns the project.
+        name:
+          type: string
+          minLength: 1
+      description: |
+        Creates a project. Both API environments (`test` and `live`) are
+        available by default; the MVP has no option to disable either.
+
+    ProjectUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+
+    ApiKey:
+      type: object
+      required: [id, project_id, environment, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: API key entity ID. Not the credential material.
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set when the key is revoked; revoked keys are rejected.
+
+    ApiKeyCreated:
+      type: object
+      required: [id, project_id, environment, key, created_at]
+      description: |
+        API key creation response. The plaintext `key` (`sk_test_...` /
+        `sk_live_...`) is returned exactly once and cannot be recovered later
+        (ADR-0006). Only a hash is stored; the key is never logged.
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        key:
+          type: string
+          description: Plaintext key material, returned only at creation.
+          example: sk_test_0192f2a0-0000-7000-8000-00000000000a
+        created_at:
+          type: string
+          format: date-time
+
+    ApiKeyCreate:
+      type: object
+      required: [environment]
+      properties:
+        environment:
+          $ref: "#/components/schemas/Environment"
+
+    Customer:
+      type: object
+      required: [id, project_id, environment, email, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        email:
+          type: string
+          format: email
+        name:
+          type: [string, "null"]
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Optional developer-defined key/value metadata.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CustomerCreate:
+      type: object
+      required: [environment, email]
+      properties:
+        environment:
+          $ref: "#/components/schemas/Environment"
+          description: |
+            The project environment the customer belongs to. With API-key
+            authentication it must match the key's environment.
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    CustomerUpdate:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Payment:
+      type: object
+      required:
+        - id
+        - project_id
+        - environment
+        - customer_id
+        - amount
+        - currency
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        customer_id:
+          type: string
+          format: uuid
+          description: The customer this payment belongs to.
+        amount:
+          $ref: "#/components/schemas/MoneyAmount"
+        currency:
+          type: string
+          enum: [usd]
+          description: USD only in the MVP (ADR-0003); the field is kept for forward compatibility.
+        status:
+          type: string
+          enum: [pending, processing, succeeded, failed]
+          description: |
+            Payment lifecycle status. The full state machine and simulation
+            behavior are refined in Phase 7.
+        failure_code:
+          type: [string, "null"]
+          description: Machine-readable failure reason when `status` is `failed`.
+        description:
+          type: [string, "null"]
+          description: Optional developer-provided description.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PaymentCreate:
+      type: object
+      required: [environment, customer_id, amount, currency]
+      properties:
+        environment:
+          $ref: "#/components/schemas/Environment"
+          description: |
+            The project environment to create the payment in. With API-key
+            authentication it must match the key's environment.
+        customer_id:
+          type: string
+          format: uuid
+        amount:
+          $ref: "#/components/schemas/MoneyAmount"
+        currency:
+          type: string
+          enum: [usd]
+        description:
+          type: string
+
+    Refund:
+      type: object
+      required:
+        - id
+        - payment_id
+        - project_id
+        - environment
+        - amount
+        - currency
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        payment_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        amount:
+          $ref: "#/components/schemas/MoneyAmount"
+        currency:
+          type: string
+          enum: [usd]
+        status:
+          type: string
+          enum: [pending, processing, succeeded, failed]
+          description: Refund lifecycle status; refined in Phase 9.
+        reason:
+          type: [string, "null"]
+          description: Optional developer-provided refund reason.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RefundCreate:
+      type: object
+      description: |
+        Full or partial refund. Omitting `amount` issues a full refund; partial
+        refunds require an amount. Validation rules are refined in Phase 9.
+      properties:
+        amount:
+          $ref: "#/components/schemas/MoneyAmount"
+        currency:
+          type: string
+          enum: [usd]
+          description: Defaults to `usd` when omitted (USD-only MVP, ADR-0003).
+        reason:
+          type: string
+
+    WebhookEndpoint:
+      type: object
+      required:
+        [
+          id,
+          project_id,
+          environment,
+          url,
+          event_types,
+          enabled,
+          created_at,
+          updated_at,
+        ]
+      description: |
+        A developer-registered destination URL with an event subscription. The
+        signing secret is never returned by the API.
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            type: string
+          description: |
+            Subscribed event types using the `<resource>.<past-tense-verb>`
+            convention, e.g. `payment.succeeded` (phase 1 §9.4).
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WebhookEndpointCreated:
+      type: object
+      required:
+        [
+          id,
+          project_id,
+          environment,
+          url,
+          event_types,
+          enabled,
+          signing_secret,
+          created_at,
+          updated_at,
+        ]
+      description: |
+        Webhook endpoint creation response. The `signing_secret` is returned
+        exactly once and is used to verify HMAC-SHA256 signatures of outbound
+        deliveries. The secret is never logged or returned again.
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        signing_secret:
+          type: string
+          description: Endpoint signing secret, returned only at creation.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WebhookEndpointCreate:
+      type: object
+      required: [environment, url, event_types]
+      properties:
+        environment:
+          $ref: "#/components/schemas/Environment"
+          description: |
+            The project environment the endpoint receives events from. With
+            API-key authentication it must match the key's environment.
+        url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+          default: true
+
+    WebhookEndpointUpdate:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+
+    WebhookEvent:
+      type: object
+      required: [id, project_id, environment, type, data, created_at]
+      description: |
+        An outbound domain event instance. The payload follows the outbound
+        envelope (phase 1 §9.5).
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        environment:
+          $ref: "#/components/schemas/Environment"
+        type:
+          type: string
+          description: Event type following `<resource>.<past-tense-verb>`.
+          example: payment.succeeded
+        data:
+          type: object
+          additionalProperties: true
+          description: Event payload.
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookDelivery:
+      type: object
+      required:
+        [id, endpoint_id, event_id, status, attempts, created_at, updated_at]
+      description: One delivery attempt of a webhook event to a webhook endpoint (phase 1 §6.2).
+      properties:
+        id:
+          type: string
+          format: uuid
+        endpoint_id:
+          type: string
+          format: uuid
+        event_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, delivered, failed]
+          description: Delivery status; retry/backoff semantics are refined in Phase 10.
+        attempts:
+          type: integer
+          minimum: 0
+        response_status:
+          type: [integer, "null"]
+          description: HTTP status returned by the destination on the last attempt, when available.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RequestLog:
+      type: object
+      required: [id, request_id, method, path, status_code, created_at]
+      description: |
+        Structured record of an API request/response (Phase 11). This is an
+        API-wide capability: a request may be public/unauthenticated or
+        authenticated by session or API key, so project/organization/user/API key
+        scope is optional. `request_id` is always present (phase 1 §7.7, §8).
+      properties:
+        id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          description: Request ID assigned at ingress (phase 1 §7.7). Always present.
+        project_id:
+          type: [string, "null"]
+          format: uuid
+          description: Project scope, when the request belongs to a project.
+        organization_id:
+          type: [string, "null"]
+          format: uuid
+          description: Organization scope, when known.
+        user_id:
+          type: [string, "null"]
+          format: uuid
+          description: Authenticated user, when the request was made with a session.
+        api_key_id:
+          type: [string, "null"]
+          format: uuid
+          description: API key entity, when the request was made with API-key authentication.
+        method:
+          type: string
+          enum: [GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD]
+        path:
+          type: string
+          description: Request path.
+        status_code:
+          type: integer
+        duration_ms:
+          type: integer
+          description: Request duration in milliseconds, when measured.
+        created_at:
+          type: string
+          format: date-time
+
+    AuditLogEntry:
+      type: object
+      required:
+        [id, organization_id, actor_type, action, resource_type, created_at]
+      description: |
+        Immutable security/business event record (Phase 12). Entries are
+        append-only and never updated or deleted (phase 1 §8).
+      properties:
+        id:
+          type: string
+          format: uuid
+        organization_id:
+          type: string
+          format: uuid
+        actor_type:
+          type: string
+          enum: [user, api_key]
+        actor_id:
+          type: [string, "null"]
+        action:
+          type: string
+          description: Machine-readable action identifier.
+        resource_type:
+          type: string
+        resource_id:
+          type: [string, "null"]
+        data:
+          type: object
+          additionalProperties: true
+          description: Optional structured context. Never contains secrets.
+        created_at:
+          type: string
+          format: date-time
+
+    OrganizationList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Organization"
+        next_cursor:
+          type: [string, "null"]
+          description: Opaque cursor for the next page; `null` when there are no more results.
+        has_more:
+          type: boolean
+          description: Whether additional results exist beyond this page.
+
+    OrganizationMemberList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrganizationMember"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    InvitationList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invitation"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    ProjectList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    ApiKeyList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    CustomerList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Customer"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    PaymentList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Payment"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    RefundList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Refund"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    WebhookEndpointList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEndpoint"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    WebhookEventList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookEvent"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    WebhookDeliveryList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookDelivery"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    RequestLogList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RequestLog"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    AuditLogEntryList:
+      type: object
+      required: [data, next_cursor, has_more]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogEntry"
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
