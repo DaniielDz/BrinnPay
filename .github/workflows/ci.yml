@@ -55,6 +55,9 @@ jobs:
           test -f .ai/SPEC.md
           echo "Required project files are present."
 
+      - name: Validate OpenAPI contract
+        run: pnpm lint:openapi
+
   ci:
     name: Lint, typecheck, test & build
     needs: validate

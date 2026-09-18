@@ -60,17 +60,17 @@
 
 **Goal:** Define the system architecture, domain model, and API contracts before writing code.
 
-- [ ] Actors identification (platform admin, org admin, developer, end user)
-- [ ] Environment definitions (local, staging, production)
-- [ ] Domain model (entities, relationships, boundaries)
-- [ ] API conventions (naming, versioning, pagination, errors)
-- [ ] OpenAPI contract
-- [ ] ID strategy (UUIDs, CUIDs, or ULIDs)
-- [ ] Event system design
-- [ ] Security baseline
-- [ ] Web application structure and route boundaries
-- [ ] Public vs authenticated application areas
-- [ ] MVP boundaries and scope
+- [x] Actors identification (platform admin, org admin, developer, end user)
+- [x] Environment definitions (local, staging, production)
+- [x] Domain model (entities, relationships, boundaries)
+- [x] API conventions (naming, versioning, pagination, errors)
+- [x] OpenAPI contract
+- [x] ID strategy (UUIDs, CUIDs, or ULIDs)
+- [x] Event system design
+- [x] Security baseline
+- [x] Web application structure and route boundaries
+- [x] Public vs authenticated application areas
+- [x] MVP boundaries and scope
 
 ---
 

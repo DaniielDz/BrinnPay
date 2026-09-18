@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "lint": "pnpm -r lint",
+    "lint": "pnpm -r lint && pnpm lint:openapi",
+    "lint:openapi": "redocly lint docs/openapi.yaml",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "build": "pnpm -r build"
@@ -20,5 +21,8 @@
     }
   },
   "packageManager": "pnpm@12.4.1",
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "@redocly/cli": "^2.53.2"
+  }
 }
