@@ -1,0 +1,19 @@
+// BrinnPay — Prisma base schema (Phase 2).
+//
+// ADR-0011: Phase 2 contains datasource + generator only. Domain models are
+// added by their owning phases via committed migrations. Conventions fixed for
+// all later phases (recorded, not modeled, here):
+//   - entity IDs are PostgreSQL `uuid` columns storing UUIDv7 (ADR-0001);
+//   - `snake_case` table and column names;
+//   - every record carries `created_at`; mutable records carry `updated_at`;
+//   - timestamps are UTC;
+//   - monetary amounts are integer minor units where applicable (ADR-0002).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}

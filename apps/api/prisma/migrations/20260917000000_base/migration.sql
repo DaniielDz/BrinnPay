@@ -1,0 +1,5 @@
+-- Phase 2 base migration.
+--
+-- Intentionally empty: the Phase 2 schema contains datasource + generator only
+-- and zero domain models (ADR-0011). Domain entities are introduced by their
+-- owning phases through migrations on top of this baseline.
