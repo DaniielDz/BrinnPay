@@ -63,6 +63,31 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: brinnpay
+          POSTGRES_PASSWORD: brinnpay
+          POSTGRES_DB: brinnpay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U brinnpay -d brinnpay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -92,6 +117,9 @@ jobs:
 
       - name: Integration/E2E tests
         run: pnpm -r run test:e2e
+        env:
+          DATABASE_URL: postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public
+          REDIS_URL: redis://localhost:6379
 
       - name: Build
         run: pnpm -r run build

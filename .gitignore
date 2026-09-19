@@ -36,6 +36,9 @@ test-results/
 *.db
 *.db-journal
 
+# Prisma generated client
+apps/api/generated/
+
 # OS files
 .DS_Store
 Thumbs.db

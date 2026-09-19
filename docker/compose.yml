@@ -1,0 +1,87 @@
+name: brinnpay
+
+# Local development services (Phase 2). No secrets are committed here: values
+# are read from the shell environment or the gitignored `.env` file, with
+# non-secret development defaults (D7).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brinnpay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brinnpay}
+      POSTGRES_DB: ${POSTGRES_DB:-brinnpay}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-brinnpay} -d ${POSTGRES_DB:-brinnpay}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      SERVICE_NAME: brinnpay-api
+      DATABASE_URL: postgresql://${POSTGRES_USER:-brinnpay}:${POSTGRES_PASSWORD:-brinnpay}@postgres:5432/${POSTGRES_DB:-brinnpay}?schema=public
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGINS: http://localhost:3001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../apps/api/src:/app/apps/api/src
+      - ../apps/api/test:/app/apps/api/test
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3000/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web/Dockerfile
+    environment:
+      PORT: 3001
+    ports:
+      - "${WEB_PORT:-3001}:3001"
+    volumes:
+      - ../apps/web/app:/app/apps/web/app
+      - ../apps/web/next.config.ts:/app/apps/web/next.config.ts
+
+volumes:
+  postgres-data:
+  redis-data:
