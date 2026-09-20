@@ -103,6 +103,8 @@ export class AuthService {
             userId: user.id,
             role: 'owner',
             createdAt: now,
+            // `updated_at` exists since Phase 4 (mutable member records).
+            updatedAt: now,
           },
         });
         userId = user.id;
