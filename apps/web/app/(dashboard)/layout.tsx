@@ -1,5 +1,8 @@
 import Link from 'next/link';
 
+import { AuthGuard } from '../../components/auth/auth-guard';
+import { SignOutButton } from '../../components/auth/sign-out-button';
+
 const DASHBOARD_NAV = [
   { href: '/dashboard', label: 'Overview' },
   { href: '/dashboard/organizations', label: 'Organizations' },
@@ -8,26 +11,32 @@ const DASHBOARD_NAV = [
 ];
 
 /**
- * Authenticated area layout (phase 1 §11.4). Minimal dashboard shell with
- * static navigation only. Route protection is NOT implemented in Phase 2
- * (phase 2 §5.2): no redirect logic, no session access, no middleware that
- * touches tokens.
+ * Authenticated area layout (phase 1 §11.4). Route protection is enforced
+ * client-side by `AuthGuard` (phase 3 §4.4); the API remains the enforcement
+ * point for every authenticated request.
  */
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="dashboard-shell">
-      <aside>
-        <nav aria-label="Dashboard">
-          <ul>
-            {DASHBOARD_NAV.map((item) => (
-              <li key={item.href}>
-                <Link href={item.href}>{item.label}</Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      </aside>
-      <main>{children}</main>
-    </div>
+    <AuthGuard>
+      <div className="dashboard-shell">
+        <aside>
+          <nav aria-label="Dashboard">
+            <ul>
+              {DASHBOARD_NAV.map((item) => (
+                <li key={item.href}>
+                  <Link href={item.href}>{item.label}</Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        </aside>
+        <main>
+          <header className="dashboard-header">
+            <SignOutButton />
+          </header>
+          {children}
+        </main>
+      </div>
+    </AuthGuard>
   );
 }

@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 
+import { AuthModule } from './auth/auth.module';
 import { ApiExceptionFilter } from './common/errors/api-exception.filter';
 import loadConfiguration from './config/configuration';
 import { HealthModule } from './health/health.module';
@@ -11,10 +12,10 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 
 /**
- * Root application module (Phase 2). Wires the base cross-cutting
- * infrastructure only: configuration, structured logging, Prisma, Redis,
- * health checks, and the global error envelope. Domain modules arrive with
- * their owning phases (3–13).
+ * Root application module (Phase 3). Wires the base cross-cutting
+ * infrastructure (configuration, structured logging, Prisma, Redis, health
+ * checks, the global error envelope) together with the auth domain module.
+ * Remaining domain modules arrive with their owning phases (4–13).
  */
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { RedisModule } from './redis/redis.module';
     PrismaModule,
     RedisModule,
     HealthModule,
+    AuthModule,
   ],
   providers: [
     {

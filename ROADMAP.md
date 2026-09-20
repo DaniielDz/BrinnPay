@@ -78,18 +78,18 @@
 
 **Goal:** Scaffold the core application stack with health checks and basic infrastructure.
 
-- [ ] NestJS backend setup (`apps/api`)
-- [ ] Next.js web application setup (`apps/web`)
-- [ ] Public web application structure
-- [ ] Initial routing structure for public and authenticated areas
-- [ ] PostgreSQL database
-- [ ] Prisma ORM + schema
-- [ ] Redis (cache/queues)
-- [ ] Docker Compose (local dev)
-- [ ] Request validation (pipes/DTOs)
-- [ ] Structured logging base
-- [ ] Health check endpoints
-- [ ] OpenAPI/Swagger integration
+- [x] NestJS backend setup (`apps/api`)
+- [x] Next.js web application setup (`apps/web`)
+- [x] Public web application structure
+- [x] Initial routing structure for public and authenticated areas
+- [x] PostgreSQL database
+- [x] Prisma ORM + schema
+- [x] Redis (cache/queues)
+- [x] Docker Compose (local dev)
+- [x] Request validation (pipes/DTOs)
+- [x] Structured logging base
+- [x] Health check endpoints
+- [x] OpenAPI/Swagger integration
 
 ---
 
@@ -97,16 +97,16 @@
 
 **Goal:** Implement user registration, login, and secure session management.
 
-- [ ] User registration
-- [ ] User login
-- [ ] Token/session management (JWT + refresh)
-- [ ] Password hashing (bcrypt/argon2)
-- [ ] Rate limiting (auth endpoints)
-- [ ] Authentication UI in `apps/web`
-- [ ] Login UI
-- [ ] Registration UI
-- [ ] Session handling in the web application
-- [ ] Auth tests
+- [x] User registration
+- [x] User login
+- [x] Token/session management (JWT + refresh)
+- [x] Password hashing (bcrypt/argon2)
+- [x] Rate limiting (auth endpoints)
+- [x] Authentication UI in `apps/web`
+- [x] Login UI
+- [x] Registration UI
+- [x] Session handling in the web application
+- [x] Auth tests
 
 ---
 

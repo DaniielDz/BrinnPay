@@ -89,10 +89,15 @@ paths:
       operationId: auth.register
       summary: Register a user account
       description: |
-        Creates a user account and establishes a session. A personal/default
-        organization is created automatically during onboarding (ADR-0010). The
-        refresh token is set as an `HttpOnly` cookie; it is never returned in
-        the JSON body (phase 1 §11.5).
+        Creates a user account and establishes a session. In a single
+        transaction (D4) the password is hashed with Argon2id (ADR-0007), a
+        personal/default organization is created with the user as `owner`
+        (ADR-0010), and the first refresh session is issued. The default
+        organization name derives from the provided name, else the email local
+        part, else `"My Organization"` (D5). Emails are normalized and unique
+        case-insensitively (D8); a duplicate email returns 409. The refresh
+        token is set as an `HttpOnly` cookie; it is never returned in the JSON
+        body (phase 1 §11.5).
       security: []
       requestBody:
         $ref: "#/components/requestBodies/RegisterBody"
@@ -121,9 +126,11 @@ paths:
       operationId: auth.login
       summary: Log in with email and password
       description: |
-        Authenticates a user and issues a short-lived JWT access token. The
-        refresh session is created and its token is set as an `HttpOnly` cookie;
-        it is never returned in the JSON body (phase 1 §11.5).
+        Authenticates a user and issues a short-lived JWT access token. Unknown
+        email and wrong password produce the identical generic 401 response, so
+        the endpoint cannot be used to enumerate accounts. The refresh session
+        is created and its token is set as an `HttpOnly` cookie; it is never
+        returned in the JSON body (phase 1 §11.5).
       security: []
       requestBody:
         $ref: "#/components/requestBodies/LoginBody"
@@ -153,8 +160,12 @@ paths:
       summary: Refresh an access token
       description: |
         Exchanges the refresh session (sent as the `HttpOnly` cookie) for a new
-        access token. Refresh sessions are revocable; invalid or revoked
-        sessions are rejected. Rotation/refresh details are refined in Phase 3.
+        access token. A successful refresh **rotates the session** (D3): the
+        presented session is revoked and a new one is issued via the cookie.
+        Presenting a revoked-but-unexpired token (a replay of an already
+        rotated token) is treated as a theft signal: all of the user's sessions
+        are revoked and the request fails with 401. Missing, invalid, expired,
+        or revoked sessions return 401 and clear the cookie.
       security: []
       responses:
         "200":
@@ -180,7 +191,10 @@ paths:
       summary: Log out and revoke the refresh session
       description: |
         Revokes the refresh session identified by the `HttpOnly` cookie and
-        clears the cookie, terminating the session.
+        clears the cookie, terminating the session. Idempotent (D9): the cookie
+        is always cleared and 204 returned whether or not a valid session was
+        present. Logout works with the refresh cookie alone and does not need
+        an access token.
       security: []
       responses:
         "204":
@@ -190,8 +204,6 @@ paths:
               $ref: "#/components/headers/X-Request-Id"
             Set-Cookie:
               $ref: "#/components/headers/RefreshTokenCookieCleared"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -1620,16 +1632,19 @@ components:
     RefreshTokenCookie:
       description: |
         Sets (or rotates) the refresh session token as an `HttpOnly` cookie
-        (phase 1 §11.5). Never readable by browser JavaScript. `Secure` in
-        secure/production environments; `SameSite` configured to minimize CSRF.
-        Exact lifetime/domain details are refined in Phase 3.
+        (phase 1 §11.5; D2/D10). Never readable by browser JavaScript. Name
+        `brinnpay_refresh`, `Path=/api/v1/auth`, `HttpOnly` always, `Secure` in
+        secure/production environments, `SameSite=Lax`. Each refresh session
+        lives for 30 days (D10); rotation on refresh opens a new window. The
+        refresh token is never returned in a JSON body.
       schema:
         type: string
         example: brinnpay_refresh=opaque_httpOnly_value; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Lax
     RefreshTokenCookieCleared:
       description: |
-        Clears the refresh session cookie on logout by setting an expired value
-        (phase 1 §11.5).
+        Clears the refresh session cookie by setting an expired value (phase 1
+        §11.5). On logout the cookie is always cleared, whether or not a valid
+        session was present (D9).
       schema:
         type: string
         example: brinnpay_refresh=; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0
@@ -2018,7 +2033,11 @@ components:
         password:
           type: string
           minLength: 8
-          description: Password. Stored only as a hash (Argon2id, the required/default algorithm — ADR-0007). Never logged or returned.
+          maxLength: 128
+          description: |
+            Password (D6): 8–128 characters, no composition rules (NIST-style).
+            Stored only as a hash (Argon2id, the required/default algorithm —
+            ADR-0007). Never logged or returned.
         name:
           type: string
           description: Optional display name.
