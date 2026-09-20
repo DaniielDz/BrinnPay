@@ -322,7 +322,9 @@ paths:
       operationId: organizations.update
       summary: Update an organization
       description: |
-        Updates organization attributes. Requires an administrative role.
+        Updates organization attributes (`name` is the only mutable attribute).
+        Requires `organizations.update` (owner/admin). Partial update: omitted
+        fields are unchanged; `updated_at` advances on change.
       security:
         - SessionAuth: []
       parameters:
@@ -356,8 +358,9 @@ paths:
       operationId: organizations.delete
       summary: Delete an organization
       description: |
-        Deletes an organization and its tenant-scoped data. Requires an
-        administrative role.
+        Deletes an organization and its tenant-scoped data (`organization_members`,
+        `invitations` cascade). **Owner only** (phase 4 §4.2). Subsequent access
+        to the organization yields 404 for everyone.
       security:
         - SessionAuth: []
       parameters:
@@ -418,8 +421,12 @@ paths:
       operationId: organizations.updateMember
       summary: Update a member role
       description: |
-        Changes the role of an organization member. Requires an administrative
-        role; role changes are enforced per phase 1 §6.4.
+        Changes the role of an organization member (phase 4 §4.2, D4).
+        Own rights: an owner may change any member's role; an admin may change
+        roles of admin/member/viewer but not owner members; granting `owner`
+        requires an owner actor. A member may change their own role only
+        downward (self-demotion). The last `owner` role cannot be changed
+        (422). `updated_at` advances on change.
       security:
         - SessionAuth: []
       parameters:
@@ -454,7 +461,10 @@ paths:
       operationId: organizations.removeMember
       summary: Remove an organization member
       description: |
-        Removes a member from the organization. Requires an administrative role.
+        Removes a member from the organization (phase 4 §4.2, D4). An owner may
+        remove any member; an admin may remove admin/member/viewer but not owner
+        members; **self-removal is always permitted**. Removing the last `owner`
+        is rejected (422).
       security:
         - SessionAuth: []
       parameters:
@@ -483,8 +493,9 @@ paths:
       operationId: organizations.listInvitations
       summary: List organization invitations
       description: |
-        Lists pending and historical invitations of an organization. Requires an
-        administrative role. Cursor pagination applies.
+        Lists pending and historical invitations (all statuses) of an
+        organization. Requires `invitations.read` (owner/admin). Cursor
+        pagination applies.
       security:
         - SessionAuth: []
       parameters:
@@ -514,8 +525,11 @@ paths:
       operationId: organizations.createInvitation
       summary: Invite a user to an organization
       description: |
-        Creates a pending membership invitation for an email address. Requires an
-        administrative role.
+        Creates a pending membership invitation (phase 4 §4.2, D5). Requires
+        `invitations.create` (owner/admin). `email` is normalized (trimmed +
+        lowercased). Inviting an existing member or creating a duplicate pending
+        invitation for the same email yields 409; inviting an `owner` role
+        requires an owner actor. Invitations have no expiry and no decline.
       security:
         - SessionAuth: []
       parameters:
@@ -553,7 +567,10 @@ paths:
       operationId: organizations.cancelInvitation
       summary: Cancel an organization invitation
       description: |
-        Revokes a pending invitation. Requires an administrative role.
+        Revokes a pending invitation (phase 4 §4.2, D5). Requires
+        `invitations.cancel` (owner/admin). Idempotent: canceling an
+        already-canceled invitation is a no-op (204). Canceling an `accepted`
+        invitation is rejected (422).
       security:
         - SessionAuth: []
       parameters:
@@ -582,8 +599,11 @@ paths:
       operationId: organizations.acceptInvitation
       summary: Accept an organization invitation
       description: |
-        Accepts a pending invitation for the authenticated user and adds them to
-        the organization with the invited role.
+        Accepts a pending invitation for the authenticated user and creates their
+        membership with the invited role (phase 4 §4.2, D5/D6). The invitation is
+        bound to the account email: a non-matching email receives the same 404 as
+        an unknown id (no disclosure). A non-pending invitation yields 422; an
+        already-member yields 409.
       security:
         - SessionAuth: []
       parameters:
@@ -2125,7 +2145,11 @@ components:
 
     OrganizationMember:
       type: object
-      required: [id, organization_id, user_id, role, created_at]
+      required: [id, organization_id, user_id, role, created_at, updated_at, user]
+      description: |
+        Membership entry (phase 4 §4.2). Carries the member's identity via the
+        `user` object. `user_id` is the target's account; `role` is the member's
+        role in this organization.
       properties:
         id:
           type: string
@@ -2141,6 +2165,25 @@ components:
         created_at:
           type: string
           format: date-time
+          description: UTC ISO 8601 timestamp.
+        updated_at:
+          type: string
+          format: date-time
+          description: UTC ISO 8601 timestamp; advances on role changes.
+        user:
+          type: object
+          required: [id, email, name]
+          description: The member's identity (subset of `User`, phase 3).
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            name:
+              type: [string, "null"]
+              description: Optional display name.
 
     OrganizationMemberUpdate:
       type: object
@@ -2151,7 +2194,12 @@ components:
 
     Invitation:
       type: object
-      required: [id, organization_id, email, role, status, created_at]
+      required: [id, organization_id, email, role, status, created_at, updated_at, accepted_at, canceled_at]
+      description: |
+        Email invitation to join an organization (phase 4 §4.2). Lifecycle:
+        `pending` → `accepted` (the invitee accepted and a membership was
+        created) or `canceled` (owner/admin revoked it). `accepted_at` and
+        `canceled_at` are `null` while `status` is `pending`.
       properties:
         id:
           type: string
@@ -2162,14 +2210,29 @@ components:
         email:
           type: string
           format: email
+          description: Normalized (trimmed, lower-cased) invitation target.
         role:
           $ref: "#/components/schemas/Role"
+          description: Role conferred upon acceptance.
         status:
           type: string
           enum: [pending, accepted, canceled]
         created_at:
           type: string
           format: date-time
+          description: UTC ISO 8601 timestamp.
+        updated_at:
+          type: string
+          format: date-time
+          description: UTC ISO 8601 timestamp; advances on acceptance/cancellation.
+        accepted_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set when the invitation is accepted.
+        canceled_at:
+          type: [string, "null"]
+          format: date-time
+          description: Set when the invitation is canceled.
 
     InvitationCreate:
       type: object

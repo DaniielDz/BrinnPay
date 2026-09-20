@@ -1,7 +1,9 @@
 # BrinnPay — Web Application Structure and Route Boundaries
 
 > Architecture artifact of **Phase 1 — Architecture & MVP Spec** (phase 1 specification §11, §13.1).
-> UI implementation is Phase 14; this document fixes the route boundaries and protection rules.
+> This document fixes the route boundaries and protection rules; full dashboard polish is
+> Phase 14. The organization management, member/role management, and invitation accept areas
+> were implemented in Phase 4 (§5).
 
 ## 1. Single application, client of the API
 
@@ -33,7 +35,16 @@ the auth pages.
 ## 4. Authenticated area (requires authentication + authorization)
 
 - `/dashboard` — overview.
-- `/dashboard/organizations` — organization management and member/role management.
+- `/dashboard/organizations` — organization management and member/role management
+  (list + create; Phase 4).
+- `/dashboard/organizations/[organizationId]` — organization detail: rename
+  (owner/admin), delete (owner-only), member list with role management, and
+  invitations (owner/admin); **non-members see a not-found state** mirroring the
+  API's 404 semantics (phase 4 D1).
+- `/dashboard/invitations/[invitationId]` — invitation accept flow (phase 4 D6):
+  the accept URL is how an invited user reaches the flow in the absence of email
+  delivery; success links back to the organization, API errors map to
+  not-found / no-longer-pending / already-member states.
 - `/dashboard/projects` — project list and management.
 - `/dashboard/projects/[projectId]` — project shell with environment selector (`TEST`/`LIVE`).
 - `/dashboard/projects/[projectId]/api-keys`
@@ -50,8 +61,12 @@ the auth pages.
 - Authenticated routes reject unauthenticated visitors (redirect to `/login`).
 - **Authenticated routes require authentication + authorization.**
 - Organization-scoped pages enforce membership; **project-scoped routes validate project access
-  within the organization** before rendering any data.
-- Role-based UI restrictions match the RBAC model (e.g., viewer sees read-only interfaces).
+  within the organization** before rendering any data. A non-member reaching
+  `/dashboard/organizations/[organizationId]` sees a not-found state (phase 4 D1), matching
+  the API's 404.
+- Role-based UI restrictions match the RBAC model (e.g., viewer sees read-only interfaces;
+  admin never sees owner-management controls; members see only self-demotion/leave actions).
+  The **API remains the enforcement point**; UI hiding is presentation only (phase 4 §5.3).
 - Data displayed is fetched from the API under the user's session; the web application never
   bypasses API-level authorization.
 
