@@ -115,6 +115,11 @@ jobs:
       - name: Unit tests
         run: pnpm -r run test
 
+      - name: Apply Prisma migrations
+        run: pnpm --filter @brinnpay/api prisma:migrate:deploy
+        env:
+          DATABASE_URL: postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public
+
       - name: Integration/E2E tests
         run: pnpm -r run test:e2e
         env:
