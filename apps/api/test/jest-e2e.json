@@ -7,9 +7,16 @@
   },
   "testRegex": ".e2e-spec.ts$",
   "transform": {
-    "^.+\\.(t|j)s$": [
+    "^.+\\.ts$": [
       "ts-jest",
       { "tsconfig": "<rootDir>/../tsconfig.spec.json" }
+    ],
+    "node_modules/.pnpm/@nestjs\\+jwt.*/node_modules/@nestjs/jwt": [
+      "ts-jest",
+      { "tsconfig": "<rootDir>/../tsconfig.node_modules.json" }
     ]
-  }
+  },
+  "transformIgnorePatterns": [
+    "node_modules/(?!\\.pnpm/)(?!@nestjs/jwt)"
+  ]
 }

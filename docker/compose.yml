@@ -48,6 +48,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-brinnpay}:${POSTGRES_PASSWORD:-brinnpay}@postgres:5432/${POSTGRES_DB:-brinnpay}?schema=public
       REDIS_URL: redis://redis:6379
       CORS_ORIGINS: http://localhost:3001
+      # Required outside test (boot-time validation, phase 3 §7.7): set
+      # JWT_SECRET in the local .env (e.g. `openssl rand -base64 48`).
+      JWT_SECRET: ${JWT_SECRET:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${API_PORT:-3000}:3000"
@@ -76,6 +79,8 @@ services:
       dockerfile: docker/web/Dockerfile
     environment:
       PORT: 3001
+      # Browser-side API URL (phase 3 §5.2.6); matches the client default.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000/api/v1}
     ports:
       - "${WEB_PORT:-3001}:3001"
     volumes:
