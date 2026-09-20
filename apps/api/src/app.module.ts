@@ -8,14 +8,16 @@ import { ApiExceptionFilter } from './common/errors/api-exception.filter';
 import loadConfiguration from './config/configuration';
 import { HealthModule } from './health/health.module';
 import { buildLoggerOptions } from './logging/logger.config';
+import { OrganizationsModule } from './organizations/organizations.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 
 /**
- * Root application module (Phase 3). Wires the base cross-cutting
+ * Root application module (Phase 4). Wires the base cross-cutting
  * infrastructure (configuration, structured logging, Prisma, Redis, health
- * checks, the global error envelope) together with the auth domain module.
- * Remaining domain modules arrive with their owning phases (4–13).
+ * checks, the global error envelope) together with the auth and organizations
+ * domain modules. Remaining domain modules arrive with their owning phases
+ * (5–13).
  */
 @Module({
   imports: [
@@ -36,6 +38,7 @@ import { RedisModule } from './redis/redis.module';
     RedisModule,
     HealthModule,
     AuthModule,
+    OrganizationsModule,
   ],
   providers: [
     {
