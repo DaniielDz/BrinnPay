@@ -2,19 +2,13 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import DashboardPage from '../../app/(dashboard)/dashboard/page';
-import OrganizationsPage from '../../app/(dashboard)/dashboard/organizations/page';
 import ProjectsPage from '../../app/(dashboard)/dashboard/projects/page';
 import SettingsPage from '../../app/(dashboard)/dashboard/settings/page';
 
-describe('dashboard placeholder pages (phase 2 §5.2)', () => {
+describe('dashboard pages (phase 2 §5.2, phase 4 §5.1)', () => {
   it('renders the dashboard overview placeholder', () => {
     render(<DashboardPage />);
     expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
-  });
-
-  it('renders the organizations placeholder', () => {
-    render(<OrganizationsPage />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Organizations' })).toBeInTheDocument();
   });
 
   it('renders the projects placeholder', () => {
