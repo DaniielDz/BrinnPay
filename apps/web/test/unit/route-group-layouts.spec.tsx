@@ -1,11 +1,24 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AuthLayout from '../../app/(auth)/layout';
 import DashboardLayout from '../../app/(dashboard)/layout';
 import PublicLayout from '../../app/(public)/layout';
+import { AuthProvider } from '../../components/auth/auth-provider';
+import { stubAuthApi, unstubAuthApi } from './auth-test-utils';
 
-describe('route-group layouts (phase 2 §5.2)', () => {
+const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: replaceMock }) }));
+
+describe('route-group layouts (phase 2 §5.2, phase 3 §4.4)', () => {
+  beforeEach(() => {
+    replaceMock.mockReset();
+  });
+
+  afterEach(() => {
+    unstubAuthApi();
+  });
+
   it('keeps the public area separate from auth and dashboard navigation', () => {
     render(<PublicLayout>page content</PublicLayout>);
 
@@ -24,25 +37,43 @@ describe('route-group layouts (phase 2 §5.2)', () => {
     expect(screen.queryByRole('navigation', { name: 'Dashboard' })).not.toBeInTheDocument();
   });
 
-  it('keeps the authenticated area behind the dashboard shell navigation', () => {
-    render(<DashboardLayout>page content</DashboardLayout>);
+  it('keeps the authenticated area behind the dashboard shell navigation', async () => {
+    stubAuthApi({ refresh: 'ok' });
+    render(
+      <AuthProvider>
+        <DashboardLayout>page content</DashboardLayout>
+      </AuthProvider>,
+    );
 
+    await waitFor(() => expect(screen.getByRole('navigation', { name: 'Dashboard' })).toBeInTheDocument());
     const nav = screen.getByRole('navigation', { name: 'Dashboard' });
     expect(nav).toHaveTextContent('Overview');
     expect(nav).toHaveTextContent('Organizations');
     expect(nav).toHaveTextContent('Projects');
     expect(nav).toHaveTextContent('Settings');
     expect(screen.getByText('page content')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it('renders child content for every layout', () => {
+  it('does not render the dashboard shell without a session', async () => {
+    stubAuthApi({ refresh: 'fail' });
+    render(
+      <AuthProvider>
+        <DashboardLayout>page content</DashboardLayout>
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('/login'));
+    expect(screen.queryByRole('navigation', { name: 'Dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByText('page content')).not.toBeInTheDocument();
+  });
+
+  it('renders child content for the public and auth layouts', () => {
     const { rerender } = render(<PublicLayout>public child</PublicLayout>);
     expect(screen.getByText('public child')).toBeInTheDocument();
 
     rerender(<AuthLayout>auth child</AuthLayout>);
     expect(screen.getByText('auth child')).toBeInTheDocument();
-
-    rerender(<DashboardLayout>dashboard child</DashboardLayout>);
-    expect(screen.getByText('dashboard child')).toBeInTheDocument();
   });
 });

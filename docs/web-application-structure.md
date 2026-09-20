@@ -65,8 +65,11 @@ the auth pages.
 
 ## 7. Session handling in the web application
 
-Architecture fixed now; exact durations, rotation, and cookie domain details belong to Phase 3
-(phase 1 §11.5).
+Session details confirmed in Phase 3 (phase 1 §11.5, D2/D3/D10): access tokens
+live 15 minutes (env-configurable); refresh sessions rotate on every refresh
+with reuse detection (D3) and each session lasts 30 days (D10); the cookie is
+`brinnpay_refresh`, `Path=/api/v1/auth`, `HttpOnly` always, `SameSite=Lax`,
+`Secure` in secure/production environments.
 
 - **Access token:** short-lived JWT used to call the API; **never** stored in `localStorage` or
   `sessionStorage`; held in memory for the active session and re-obtained via refresh.
