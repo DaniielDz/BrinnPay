@@ -359,7 +359,8 @@ paths:
       summary: Delete an organization
       description: |
         Deletes an organization and its tenant-scoped data (`organization_members`,
-        `invitations` cascade). **Owner only** (phase 4 §4.2). Subsequent access
+        `invitations` cascade; projects of the organization and their API keys are
+        cascade-deleted, D7). **Owner only** (phase 4 §4.2). Subsequent access
         to the organization yields 404 for everyone.
       security:
         - SessionAuth: []
@@ -697,7 +698,8 @@ paths:
       summary: Retrieve a project
       description: |
         Returns a project. Access requires membership in the owning organization
-        and project access within it (phase 1 §11.4).
+        and project access within it (phase 1 §11.4); non-members receive 404 so
+        project existence is not disclosed.
       security:
         - SessionAuth: []
       parameters:
@@ -760,7 +762,9 @@ paths:
       operationId: projects.delete
       summary: Delete a project
       description: |
-        Deletes a project and its tenant-scoped data. Requires an administrative
+        Deletes a project and its tenant-scoped data, including the project's API
+        keys (they are removed with the project; the cascade also applies when the
+        owning organization is deleted, D7). Requires an administrative
         role in the owning organization.
       security:
         - SessionAuth: []
@@ -789,8 +793,10 @@ paths:
       operationId: apiKeys.list
       summary: List API keys of a project
       description: |
-        Lists the API keys of a project environment. Plaintext key material is
-        never returned (ADR-0006).
+        Project-wide list of the API keys of a project (both the `test` and the
+        `live` environment, D5). Revoked keys stay listed with a non-null
+        `revoked_at`. Plaintext key material is never returned (ADR-0006);
+        entries are metadata only.
       security:
         - SessionAuth: []
       parameters:
@@ -858,8 +864,10 @@ paths:
       operationId: apiKeys.revoke
       summary: Revoke an API key
       description: |
-        Revokes an API key. Revoked keys are rejected by API-key
-        authentication. Requires an administrative role.
+        Revokes an API key. Revoked keys are rejected by API-key authentication and
+        stay listed with a non-null `revoked_at`. Revoking an already-revoked key
+        is an idempotent no-op (204). Requires an administrative role in the
+        owning organization.
       security:
         - SessionAuth: []
       parameters:
