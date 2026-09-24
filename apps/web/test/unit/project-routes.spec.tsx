@@ -1,19 +1,19 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import ProjectApiKeysPage from '../../app/(dashboard)/dashboard/projects/[projectId]/api-keys/page';
 import ProjectCustomersPage from '../../app/(dashboard)/dashboard/projects/[projectId]/customers/page';
 import ProjectLogsAuditPage from '../../app/(dashboard)/dashboard/projects/[projectId]/logs/audit/page';
 import ProjectLogsRequestsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/logs/requests/page';
-import ProjectPage from '../../app/(dashboard)/dashboard/projects/[projectId]/page';
 import ProjectPaymentsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/payments/page';
 import ProjectRefundsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/refunds/page';
 import ProjectWebhooksPage from '../../app/(dashboard)/dashboard/projects/[projectId]/webhooks/page';
 
 describe('project route skeleton (phase 2 §5.2)', () => {
+  // `projects/[projectId]` and `projects/[projectId]/api-keys` are data-driven
+  // since Phase 5 (project shell + API-key management); the remaining
+  // environment-scoped child routes keep their placeholders until their
+  // owning phases (6+).
   const cases = [
-    { Component: ProjectPage, heading: 'Project' },
-    { Component: ProjectApiKeysPage, heading: 'API keys' },
     { Component: ProjectCustomersPage, heading: 'Customers' },
     { Component: ProjectPaymentsPage, heading: 'Payments' },
     { Component: ProjectRefundsPage, heading: 'Refunds' },

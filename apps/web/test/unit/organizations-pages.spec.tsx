@@ -43,8 +43,7 @@ describe('organization list page (phase 4 §5.1)', () => {
       </AuthProvider>,
     );
 
-    const heading = await screen.findByRole('heading', { level: 1, name: 'Organizations' });
-    expect(heading).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Organizations' });
 
     const link = await screen.findByRole('link', { name: /Acme Sandbox/ });
     expect(link).toHaveAttribute('href', `/dashboard/organizations/${orgFixture.id}`);
@@ -88,8 +87,7 @@ describe('organization list page (phase 4 §5.1)', () => {
       </AuthProvider>,
     );
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toBeInTheDocument();
+    await screen.findByRole('alert');
   });
 });
 
@@ -109,7 +107,7 @@ describe('organization detail page (phase 4 §5.1/§5.2)', () => {
     );
 
     // Organization info + team members.
-    expect(await screen.findByRole('heading', { level: 1, name: 'Acme Sandbox' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Acme Sandbox' });
     expect(screen.getByText(/ada lovelace|owner@example.com/i)).toBeInTheDocument();
     expect(screen.getByText(/grace hopper|admin@example.com/i)).toBeInTheDocument();
 
@@ -161,7 +159,7 @@ describe('organization detail page (phase 4 §5.1/§5.2)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Organization not found' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Organization not found' });
     expect(screen.getByRole('link', { name: 'Back to organizations' })).toBeInTheDocument();
   });
 
@@ -188,7 +186,7 @@ describe('organization detail page (phase 4 §5.1/§5.2)', () => {
         }),
       );
     });
-    expect(await screen.findByRole('heading', { level: 1, name: 'Acme Renamed' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Acme Renamed' });
   });
 
   it('deletes the organization after confirmation and navigates to the list', async () => {
@@ -233,7 +231,7 @@ describe('invitation accept page (phase 4 §5.2, D6)', () => {
     const button = await screen.findByRole('button', { name: 'Accept invitation' });
     fireEvent.click(button);
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Invitation accepted' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Invitation accepted' });
     expect(screen.getByRole('link', { name: 'Open the organization' })).toHaveAttribute(
       'href',
       `/dashboard/organizations/${orgFixture.id}`,

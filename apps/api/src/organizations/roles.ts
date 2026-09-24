@@ -20,6 +20,13 @@ export const CAPABILITIES = {
   INVITATIONS_READ: 'invitations.read',
   INVITATIONS_CREATE: 'invitations.create',
   INVITATIONS_CANCEL: 'invitations.cancel',
+  PROJECTS_READ: 'projects.read',
+  PROJECTS_CREATE: 'projects.create',
+  PROJECTS_UPDATE: 'projects.update',
+  PROJECTS_DELETE: 'projects.delete',
+  API_KEYS_READ: 'apiKeys.read',
+  API_KEYS_CREATE: 'apiKeys.create',
+  API_KEYS_REVOKE: 'apiKeys.revoke',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -41,6 +48,15 @@ const MATRIX: Record<Capability, readonly Role[]> = {
   [CAPABILITIES.INVITATIONS_READ]: ['owner', 'admin'],
   [CAPABILITIES.INVITATIONS_CREATE]: ['owner', 'admin'],
   [CAPABILITIES.INVITATIONS_CANCEL]: ['owner', 'admin'],
+  // Phase 5 matrix (§4.3, D3): read/project and read/api-keys for every
+  // member role; create/update/delete/revoke are administrative (owner+admin).
+  [CAPABILITIES.PROJECTS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.PROJECTS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.PROJECTS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.PROJECTS_DELETE]: ['owner', 'admin'],
+  [CAPABILITIES.API_KEYS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.API_KEYS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.API_KEYS_REVOKE]: ['owner', 'admin'],
 };
 
 export function isRole(value: string): value is Role {

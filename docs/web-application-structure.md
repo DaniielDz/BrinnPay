@@ -3,7 +3,8 @@
 > Architecture artifact of **Phase 1 — Architecture & MVP Spec** (phase 1 specification §11, §13.1).
 > This document fixes the route boundaries and protection rules; full dashboard polish is
 > Phase 14. The organization management, member/role management, and invitation accept areas
-> were implemented in Phase 4 (§5).
+> were implemented in Phase 4 (§5); the project list/shell and environment selection UI were
+> implemented in Phase 5 (§5.1–§5.3).
 
 ## 1. Single application, client of the API
 
@@ -45,9 +46,18 @@ the auth pages.
   the accept URL is how an invited user reaches the flow in the absence of email
   delivery; success links back to the organization, API errors map to
   not-found / no-longer-pending / already-member states.
-- `/dashboard/projects` — project list and management.
-- `/dashboard/projects/[projectId]` — project shell with environment selector (`TEST`/`LIVE`).
-- `/dashboard/projects/[projectId]/api-keys`
+- `/dashboard/projects` — project list and management (Phase 5 §5.1): list across
+  the caller's organizations with the owning organization and `TEST`/`LIVE`
+  badges; create form (owner/admin organizations only).
+- `/dashboard/projects/[projectId]` — project shell (Phase 5 §5.3) with the
+  environment selector (`TEST`/`LIVE`) and rename/delete controls (owner/admin).
+  The selector is **UI state**: it is persisted as the `environment` query
+  parameter on every environment-scoped child link, defaulting to `test`.
+- `/dashboard/projects/[projectId]/api-keys` — API-key management (Phase 5 §5.2):
+  project-wide list (both environments, per D5) with revoked state, create with
+  **once-only** plaintext display (the credential appears in exactly one create
+  response and is never shown again), revoke with confirmation, and rotate
+  (create-then-revoke, D1) for owner/admin; non-members see the not-found state.
 - `/dashboard/projects/[projectId]/customers`
 - `/dashboard/projects/[projectId]/payments`
 - `/dashboard/projects/[projectId]/refunds`
@@ -62,8 +72,8 @@ the auth pages.
 - **Authenticated routes require authentication + authorization.**
 - Organization-scoped pages enforce membership; **project-scoped routes validate project access
   within the organization** before rendering any data. A non-member reaching
-  `/dashboard/organizations/[organizationId]` sees a not-found state (phase 4 D1), matching
-  the API's 404.
+  `/dashboard/organizations/[organizationId]` or any `/dashboard/projects/[projectId]**` route
+  sees a not-found state (phases 4/5 D1/D2), matching the API's 404.
 - Role-based UI restrictions match the RBAC model (e.g., viewer sees read-only interfaces;
   admin never sees owner-management controls; members see only self-demotion/leave actions).
   The **API remains the enforcement point**; UI hiding is presentation only (phase 4 §5.3).
