@@ -48,7 +48,7 @@ describe('project list page (phase 5 §5.1)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Projects' });
     const link = await screen.findByRole('link', { name: /Payments API/ });
     expect(link).toHaveAttribute('href', `/dashboard/projects/${projectFixture.id}`);
     // Owning organization appears on the row and as the create-form selector.
@@ -103,7 +103,7 @@ describe('project list page (phase 5 §5.1)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    await screen.findByRole('alert');
   });
 });
 
@@ -118,7 +118,7 @@ describe('project shell page (phase 5 §5.1/§5.3)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Payments API' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Payments API' });
     expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete project' })).toBeInTheDocument();
 
@@ -177,7 +177,7 @@ describe('project shell page (phase 5 §5.1/§5.3)', () => {
         expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ name: 'Checkout API' }) }),
       );
     });
-    expect(await screen.findByRole('heading', { level: 1, name: 'Checkout API' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Checkout API' });
   });
 
   it('deletes the project after confirmation and navigates to the list', async () => {
@@ -229,7 +229,7 @@ describe('project shell page (phase 5 §5.1/§5.3)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Project not found' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Project not found' });
     expect(screen.getByRole('link', { name: 'Back to projects' })).toBeInTheDocument();
   });
 });
@@ -245,7 +245,7 @@ describe('API-key management page (phase 5 §5.2)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'API keys' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'API keys' });
     // Wait for the project-wide list to finish loading (the heading also
     // renders during the loading state).
     await screen.findByText('key-1');
@@ -287,7 +287,7 @@ describe('API-key management page (phase 5 §5.2)', () => {
     });
 
     const revealed = createdKeyFixture('live');
-    expect(await screen.findByText(revealed.key)).toBeInTheDocument();
+    await screen.findByText(revealed.key);
     expect(screen.getByText(/this is the only time this key is shown/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
   });
@@ -346,7 +346,7 @@ describe('API-key management page (phase 5 §5.2)', () => {
 
     // The replacement inherits the rotated key's environment (key-2 = LIVE).
     const revealed = createdKeyFixture('live');
-    expect(await screen.findByText(revealed.key)).toBeInTheDocument();
+    await screen.findByText(revealed.key);
 
     await waitFor(() => {
       const createCalls = fetchMock.mock.calls.filter(
@@ -393,6 +393,6 @@ describe('API-key management page (phase 5 §5.2)', () => {
       </AuthProvider>,
     );
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Project not found' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Project not found' });
   });
 });

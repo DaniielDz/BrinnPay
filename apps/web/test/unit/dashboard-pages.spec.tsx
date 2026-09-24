@@ -28,7 +28,7 @@ describe('dashboard pages (phase 2 §5.2, phase 4 §5.1)', () => {
       </AuthProvider>,
     );
     // The heading appears only after the session restore provides a token.
-    expect(await screen.findByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Projects' });
     await waitFor(() => expect(screen.getByText('TEST')).toBeInTheDocument());
   });
 

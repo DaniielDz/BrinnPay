@@ -54,7 +54,8 @@ describe('authentication pages (phase 3 §4.2)', () => {
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'wrong-password' } });
     fireEvent.click(screen.getByRole('button', { name: /log in/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid email or password');
+    await screen.findByRole('alert');
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid email or password');
     expect(replaceMock).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /log in/i })).toBeEnabled();
   });
@@ -97,7 +98,8 @@ describe('authentication pages (phase 3 §4.2)', () => {
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'password-123' } });
     fireEvent.click(screen.getByRole('button', { name: /register/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('email is already registered');
+    await screen.findByRole('alert');
+    expect(screen.getByRole('alert')).toHaveTextContent('email is already registered');
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
