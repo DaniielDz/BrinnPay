@@ -318,3 +318,124 @@ export function acceptInvitation(accessToken: string, invitationId: string): Pro
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Projects (phase 5 §4.2)
+// ---------------------------------------------------------------------------
+
+/** Project environments: lowercase API values (`test`/`live`), uppercase in
+ *  UI copy (`TEST`/`LIVE`) and in the key prefixes (`sk_test_…`/`sk_live_…`).
+ *  A project always supports both; the API derives `environments` (D6). */
+export type Environment = 'test' | 'live';
+
+export function isEnvironment(value: string): value is Environment {
+  return value === 'test' || value === 'live';
+}
+
+export interface Project {
+  id: string;
+  organization_id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  environments: Environment[];
+}
+
+export interface CreateProjectInput {
+  organization_id: string;
+  name: string;
+}
+
+export function listProjects(
+  accessToken: string,
+  query: { limit?: number; cursor?: string } = {},
+): Promise<CursorPage<Project>> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  const suffix = params.size > 0 ? `?${params}` : '';
+  return apiFetch<CursorPage<Project>>(`/projects${suffix}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function createProject(accessToken: string, input: CreateProjectInput): Promise<Project> {
+  return apiFetch<Project>('/projects', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function retrieveProject(accessToken: string, projectId: string): Promise<Project> {
+  return apiFetch<Project>(`/projects/${projectId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function updateProject(accessToken: string, projectId: string, name: string): Promise<Project> {
+  return apiFetch<Project>(`/projects/${projectId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteProject(accessToken: string, projectId: string): Promise<void> {
+  return apiFetch<void>(`/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// API keys (phase 5 §4.2/§4.5)
+// ---------------------------------------------------------------------------
+
+/** `ApiKey` as contracted: metadata only — the plaintext credential never
+ *  appears after creation (the server stores only its hash). */
+export interface ApiKey {
+  id: string;
+  project_id: string;
+  environment: Environment;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+/** `ApiKeyCreated`: the `key` field carries the plaintext exactly once. */
+export interface ApiKeyCreated extends ApiKey {
+  key: string;
+}
+
+export function listApiKeys(
+  accessToken: string,
+  projectId: string,
+  query: { limit?: number; cursor?: string } = {},
+): Promise<CursorPage<ApiKey>> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  const suffix = params.size > 0 ? `?${params}` : '';
+  return apiFetch<CursorPage<ApiKey>>(`/projects/${projectId}/api-keys${suffix}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function createApiKey(
+  accessToken: string,
+  projectId: string,
+  environment: Environment,
+): Promise<ApiKeyCreated> {
+  return apiFetch<ApiKeyCreated>(`/projects/${projectId}/api-keys`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ environment }),
+  });
+}
+
+export function revokeApiKey(accessToken: string, projectId: string, apiKeyId: string): Promise<void> {
+  return apiFetch<void>(`/projects/${projectId}/api-keys/${apiKeyId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
