@@ -48,6 +48,29 @@ describe('roles / permission matrix (phase 4 §4.3, D2/D3)', () => {
     }
   });
 
+  it('phase 5: projects.read and apiKeys.read are granted to every role (§4.3, D3)', () => {
+    for (const capability of ['projects.read', 'apiKeys.read'] as const) {
+      for (const role of ['owner', 'admin', 'member', 'viewer'] as const) {
+        expect(can(role, capability)).toBe(true);
+      }
+    }
+  });
+
+  it('phase 5: projects.create/update/delete and apiKeys.create/revoke are owner+admin only (§4.3, D3)', () => {
+    for (const capability of [
+      'projects.create',
+      'projects.update',
+      'projects.delete',
+      'apiKeys.create',
+      'apiKeys.revoke',
+    ] as const) {
+      expect(can('owner', capability)).toBe(true);
+      expect(can('admin', capability)).toBe(true);
+      expect(can('member', capability)).toBe(false);
+      expect(can('viewer', capability)).toBe(false);
+    }
+  });
+
   it('isDownward reflects the strict owner > admin > member > viewer ordering', () => {
     expect(isDownward('owner', 'admin')).toBe(true);
     expect(isDownward('admin', 'member')).toBe(true);
