@@ -63,7 +63,14 @@ the auth pages.
   mixed) with debounced search and cursor pagination; create / edit / delete for
   owner/admin (capability matrix §4.3) via the customers API; member/viewer keep
   the read-only list and detail; non-members see the not-found state.
-- `/dashboard/projects/[projectId]/payments`
+- `/dashboard/projects/[projectId]/payments` — payments dashboard (Phase 7 §5.2):
+  environment-scoped list (from the shell selector; TEST/LIVE data is never
+  mixed) with cursor pagination and a refresh button; while any visible
+  payment is non-terminal the page polls so the default-success simulation
+  (pending → processing → succeeded) becomes visible without a reload; create
+  for owner/admin (capability matrix §4.3) via the payments API with a
+  customer select scoped to the same project+environment; member/viewer keep
+  the read-only list and detail; non-members see the not-found state.
 - `/dashboard/projects/[projectId]/refunds`
 - `/dashboard/projects/[projectId]/webhooks`
 - `/dashboard/projects/[projectId]/logs/requests`

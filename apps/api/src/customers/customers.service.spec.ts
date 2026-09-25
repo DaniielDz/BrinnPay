@@ -56,11 +56,13 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
   let service: CustomersService;
   let prisma: {
     customer: { findMany: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
+    payment: { count: jest.Mock };
   };
 
   beforeEach(() => {
     prisma = {
       customer: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+      payment: { count: jest.fn() },
     };
     service = new CustomersService(prisma as unknown as PrismaService);
   });
@@ -384,13 +386,39 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
     });
   });
 
-  describe('delete (§4.2)', () => {
-    it('hard-deletes the scoped customer row', async () => {
+  describe('delete (§4.2, D4 phase 7)', () => {
+    it('hard-deletes the scoped customer row when no payments reference it', async () => {
       prisma.customer.findFirst.mockResolvedValue(customerRow());
+      prisma.payment.count.mockResolvedValue(0);
       prisma.customer.delete.mockResolvedValue(customerRow());
 
       await expect(service.delete(sessionScope(), CUSTOMER_ID)).resolves.toBeUndefined();
+      expect(prisma.payment.count).toHaveBeenCalledWith({
+        where: { customerId: CUSTOMER_ID },
+      });
       expect(prisma.customer.delete).toHaveBeenCalledWith({ where: { id: CUSTOMER_ID } });
+    });
+
+    it('returns 422 BUSINESS_RULE_VIOLATION when the customer has linked payments (D4)', async () => {
+      prisma.customer.findFirst.mockResolvedValue(customerRow());
+      prisma.payment.count.mockResolvedValue(2);
+
+      await expect(service.delete(sessionScope(), CUSTOMER_ID)).rejects.toMatchObject({
+        code: 'BUSINESS_RULE_VIOLATION',
+        status: 422,
+      });
+      expect(prisma.customer.delete).not.toHaveBeenCalled();
+    });
+
+    it('maps the P2003 FK backstop to 422 when a payment races in before the delete (D4)', async () => {
+      prisma.customer.findFirst.mockResolvedValue(customerRow());
+      prisma.payment.count.mockResolvedValue(0);
+      prisma.customer.delete.mockRejectedValue(knownError('P2003'));
+
+      await expect(service.delete(sessionScope(), CUSTOMER_ID)).rejects.toMatchObject({
+        code: 'BUSINESS_RULE_VIOLATION',
+        status: 422,
+      });
     });
 
     it('returns 404 for an unknown customer without deleting', async () => {
@@ -405,6 +433,7 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
 
     it('returns 404 when the customer disappears between read and delete (P2025)', async () => {
       prisma.customer.findFirst.mockResolvedValue(customerRow());
+      prisma.payment.count.mockResolvedValue(0);
       prisma.customer.delete.mockRejectedValue(knownError('P2025'));
 
       await expect(service.delete(sessionScope(), CUSTOMER_ID)).rejects.toMatchObject({

@@ -86,6 +86,19 @@ describe('roles / permission matrix (phase 4 §4.3, D2/D3)', () => {
     }
   });
 
+  it('phase 7: payments.read is granted to every member role (§4.3, D5)', () => {
+    for (const role of ['owner', 'admin', 'member', 'viewer'] as const) {
+      expect(can(role, 'payments.read')).toBe(true);
+    }
+  });
+
+  it('phase 7: payments.create is owner+admin only (§4.3, D5)', () => {
+    expect(can('owner', 'payments.create')).toBe(true);
+    expect(can('admin', 'payments.create')).toBe(true);
+    expect(can('member', 'payments.create')).toBe(false);
+    expect(can('viewer', 'payments.create')).toBe(false);
+  });
+
   it('isDownward reflects the strict owner > admin > member > viewer ordering', () => {
     expect(isDownward('owner', 'admin')).toBe(true);
     expect(isDownward('admin', 'member')).toBe(true);

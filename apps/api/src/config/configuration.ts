@@ -25,6 +25,10 @@ export interface BrinnPayConfig {
       ipReadMax: number;
     };
   };
+  payments: {
+    pendingDelayMs: number;
+    settlementDelayMs: number;
+  };
 }
 
 const DEFAULT_DATABASE_URL = 'postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public';
@@ -42,6 +46,12 @@ const DEFAULT_IP_LOGIN_REGISTER_MAX = 10;
 const DEFAULT_ACCOUNT_LOGIN_REGISTER_MAX = 10;
 const DEFAULT_IP_REFRESH_MAX = 60;
 const DEFAULT_IP_READ_MAX = 100;
+
+// Phase 7 simulation timing (phase 7 §4.6, D2): the payment state machine
+// advances deterministically from `created_at` and these two delay constants.
+// Env-driven so tests run with near-zero delays (deterministic, fast CI).
+const DEFAULT_PAYMENT_PENDING_DELAY_MS = 1_000;
+const DEFAULT_PAYMENT_SETTLEMENT_DELAY_MS = 2_000;
 
 function parsePort(raw: string | undefined, fallback: number): number {
   const value = raw === undefined || raw === '' ? Number(fallback) : Number(raw);
@@ -188,6 +198,18 @@ export function loadConfiguration(): BrinnPayConfig {
           'AUTH_RATE_LIMIT_IP_READ_MAX',
         ),
       },
+    },
+    payments: {
+      pendingDelayMs: parsePositiveInt(
+        process.env.PAYMENT_PENDING_DELAY_MS,
+        DEFAULT_PAYMENT_PENDING_DELAY_MS,
+        'PAYMENT_PENDING_DELAY_MS',
+      ),
+      settlementDelayMs: parsePositiveInt(
+        process.env.PAYMENT_SETTLEMENT_DELAY_MS,
+        DEFAULT_PAYMENT_SETTLEMENT_DELAY_MS,
+        'PAYMENT_SETTLEMENT_DELAY_MS',
+      ),
     },
   };
 }

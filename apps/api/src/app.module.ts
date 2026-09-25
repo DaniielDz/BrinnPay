@@ -11,16 +11,17 @@ import loadConfiguration from './config/configuration';
 import { HealthModule } from './health/health.module';
 import { buildLoggerOptions } from './logging/logger.config';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { RedisModule } from './redis/redis.module';
 
 /**
- * Root application module (Phase 6). Wires the base cross-cutting
+ * Root application module (Phase 7). Wires the base cross-cutting
  * infrastructure (configuration, structured logging, Prisma, Redis, health
  * checks, the global error envelope) together with the auth, organizations,
- * projects, api-keys, and customers domain modules. Remaining domain modules
- * arrive with their owning phases (7–13).
+ * projects, api-keys, customers, and payments domain modules. Remaining domain
+ * modules arrive with their owning phases (8–13).
  */
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { RedisModule } from './redis/redis.module';
     ProjectsModule,
     ApiKeysModule,
     CustomersModule,
+    PaymentsModule,
   ],
   providers: [
     {

@@ -33,6 +33,15 @@ export interface CustomerResponse {
 
 const CUSTOMER_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Customer not found', 404);
 
+/** D4 (phase 7 §4.9): a customer with linked payments cannot be deleted — the
+ *  payments.customer_id FK is `ON DELETE RESTRICT` as the DB backstop. */
+const CUSTOMER_HAS_PAYMENTS = () =>
+  new ApiError(
+    ErrorCode.BUSINESS_RULE_VIOLATION,
+    'Customer has linked payments and cannot be deleted',
+    422,
+  );
+
 function isPrismaError(error: unknown, code: string): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
@@ -165,15 +174,34 @@ export class CustomersService {
     }
   }
 
-  /** Delete (§4.2): hard delete (no child rows exist until Phase 7); returns
-   *  void (204) and subsequent access yields 404 for everyone. */
+  /**
+   * Delete (§4.2, D4 phase 7): hard delete — but the customers module now
+   * rejects deleting a customer with linked payments (the payment surface
+   * exists since Phase 7): **422 `BUSINESS_RULE_VIOLATION`** when any payment
+   * references the customer. A customer without payments is deleted as before
+   * (**204**). The `payments.customer_id` FK (`ON DELETE RESTRICT`) is the
+   * DB backstop — a race between the count and the delete surfaces as a
+   * Prisma P2003, which is mapped to the same 422. Subsequent access yields
+   * 404 for everyone.
+   */
   async delete(scope: CustomersScope, customerId: string): Promise<void> {
     const customer = await this.findScopedCustomer(scope, customerId);
+
+    const linked = await this.prisma.payment.count({ where: { customerId: customer.id } });
+    if (linked > 0) {
+      throw CUSTOMER_HAS_PAYMENTS();
+    }
+
     try {
       await this.prisma.customer.delete({ where: { id: customer.id } });
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
+        // Deleted between the read and the delete; the customer no longer exists.
         throw CUSTOMER_NOT_FOUND();
+      }
+      if (isPrismaError(error, 'P2003')) {
+        // FK backstop: a payment was attached between the count and the delete.
+        throw CUSTOMER_HAS_PAYMENTS();
       }
       throw error;
     }

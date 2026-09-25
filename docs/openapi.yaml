@@ -1063,7 +1063,11 @@ paths:
       tags: [customers]
       operationId: customers.delete
       summary: Delete a customer
-      description: Deletes a customer record. Behavior with linked payments is refined in Phase 7.
+      description: |
+        Deletes a customer record (hard delete). 422 `BUSINESS_RULE_VIOLATION`
+        when the customer has linked payments — the payments reference the
+        customer (`payments.customer_id` FK is `ON DELETE RESTRICT` as the DB
+        backstop).
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1094,7 +1098,11 @@ paths:
       summary: List payments of a project
       description: |
         Lists the simulated payments of a project environment with cursor
-        pagination. The payment state machine is refined in Phase 7.
+        pagination. Payments advance lazily: a `pending` or `processing`
+        payment whose simulated schedule has elapsed is advanced on read, so a
+        page may already reflect `succeeded`/`failed` states. API-key
+        authentication derives the environment from the key; an explicit
+        conflicting value is a 422.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1121,6 +1129,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
         "429":
           $ref: "#/components/responses/RateLimited"
     post:
@@ -1128,10 +1138,15 @@ paths:
       operationId: payments.create
       summary: Create a payment
       description: |
-        Creates a simulated payment in a project environment. This is a critical
-        mutation: it accepts the `Idempotency-Key` header with operation scope
-        `payments.create` (ADR-0004). With API-key authentication the environment
-        is derived from the key and must match the payload.
+        Creates a simulated payment in a project environment (created with
+        `status: pending` and advanced automatically by the simulation). This
+        is a critical mutation: it accepts the `Idempotency-Key` header with
+        operation scope `payments.create` (ADR-0004 — accepted and validated
+        in this phase; replay/deduplication lands with the idempotency records
+        phase). With API-key authentication the environment is derived from
+        the key and must match the payload (422 otherwise). The `customer_id`
+        must be a customer of the same project (and, for API keys, the same
+        environment); unknown or cross-scope customers are a 404.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -2029,6 +2044,8 @@ components:
       description: |
         Monetary amount as a decimal string in the currency's minor-unit scale
         (ADR-0002). For USD two decimal places are supported, e.g. `"10.00"`.
+        Amounts are strictly positive (zero and negative values are rejected
+        as a 400 `VALIDATION_ERROR`).
 
     ErrorEnvelope:
       type: object
@@ -2509,11 +2526,19 @@ components:
           type: string
           enum: [pending, processing, succeeded, failed]
           description: |
-            Payment lifecycle status. The full state machine and simulation
-            behavior are refined in Phase 7.
+            Payment lifecycle status. The simulation advances payments
+            deterministically from `created_at`: `pending → processing` then
+            `processing → succeeded` (the default-success simulation). Terminal
+            states are absorbing; a payment never leaves `succeeded`/`failed`.
+            The `failed` status is defined (and its transition legal) with no
+            public trigger in this phase — the sandbox controls of a later
+            phase enable it.
         failure_code:
           type: [string, "null"]
-          description: Machine-readable failure reason when `status` is `failed`.
+          description: |
+            Machine-readable failure reason, `null` unless `status` is
+            `failed`. The failure-code catalog is defined by the sandbox
+            controls of a later phase — always `null` in this phase.
         description:
           type: [string, "null"]
           description: Optional developer-provided description.

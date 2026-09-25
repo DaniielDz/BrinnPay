@@ -544,3 +544,90 @@ export function deleteCustomer(accessToken: string, projectId: string, customerI
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Payments (phase 7 §4.2/§5.2)
+// ---------------------------------------------------------------------------
+
+/** `Payment` as contracted (phase 7 §4.2): the simulation lifetime, `amount`
+ *  as a decimal string (`MoneyAmount`, ADR-0002), `currency` always `usd`
+ *  (ADR-0003), `failure_code` `null` unless the payment ever `failed`.
+ *  `status` advances automatically on read (default-success simulation). */
+export interface Payment {
+  id: string;
+  project_id: string;
+  environment: Environment;
+  customer_id: string;
+  amount: string;
+  currency: 'usd';
+  status: 'pending' | 'processing' | 'succeeded' | 'failed';
+  failure_code: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function isTerminalPayment(payment: Payment): boolean {
+  return payment.status === 'succeeded' || payment.status === 'failed';
+}
+
+/** A customer of the same (project, environment) to scope the create form. */
+export interface PaymentCustomerOption {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+/** `PaymentCreate` (phase 7 §4.2): environment (required — the page always
+ *  passes the shell-selected environment, D1), customer_id, amount and
+ *  currency; description optional. */
+export interface CreatePaymentInput {
+  environment: Environment;
+  customer_id: string;
+  amount: string;
+  currency: 'usd';
+  description?: string;
+}
+
+export interface ListPaymentsQuery {
+  environment?: Environment;
+  limit?: number;
+  cursor?: string;
+}
+
+export function listPayments(
+  accessToken: string,
+  projectId: string,
+  query: ListPaymentsQuery = {},
+): Promise<CursorPage<Payment>> {
+  const params = new URLSearchParams();
+  if (query.environment !== undefined) params.set('environment', query.environment);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  const suffix = params.size > 0 ? `?${params}` : '';
+  return apiFetch<CursorPage<Payment>>(`/projects/${projectId}/payments${suffix}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function createPayment(
+  accessToken: string,
+  projectId: string,
+  input: CreatePaymentInput,
+): Promise<Payment> {
+  return apiFetch<Payment>(`/projects/${projectId}/payments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function retrievePayment(
+  accessToken: string,
+  projectId: string,
+  paymentId: string,
+): Promise<Payment> {
+  return apiFetch<Payment>(`/projects/${projectId}/payments/${paymentId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}

@@ -84,6 +84,20 @@ model Organization {
 // (project deletion removes its customers); the composite (project, environment)
 // index serves the environment-scoped list scans.
 
+// Phase 7 (ADR-0011): payments. `payments` is the simulated payment operation
+// (ADR-0008-derived, no real money): scoped to exactly one project and one
+// environment (`test`/`live`, app-validated) and to one customer of the same
+// (project, environment). `amount_minor` stores integer minor units (ADR-0002,
+// USD scale 2) as `bigint` so amounts cannot overflow; `currency` is `usd` only
+// in the MVP (ADR-0003); `status`/`failure_code` are app-validated (phase 4 D10
+// pattern; `failure_code` is null unless `status = failed`, catalog is
+// Phase 16). FKs: `project_id` ON DELETE CASCADE (project deletion removes its
+// payments) and `customer_id` ON DELETE RESTRICT (D4 — a customer with payments
+// cannot be deleted). Indexes serve the environment-scoped list scans
+// (id-ordered cursor pagination) and the delete-with-payments check.
+// Transition times are derived from `created_at` and the delay constants
+// (phase 7 §4.6) — no separate transition columns.
+
 model Project {
   id             String   @id @db.Uuid
   organizationId String   @map("organization_id") @db.Uuid
@@ -94,6 +108,7 @@ model Project {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   apiKeys      ApiKey[]
   customers    Customer[]
+  payments     Payment[]
 
   @@index([organizationId])
   @@map("projects")
@@ -110,10 +125,32 @@ model Customer {
   updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payments Payment[]
 
   @@index([projectId])
   @@index([projectId, environment])
   @@map("customers")
+}
+
+model Payment {
+  id          String   @id @db.Uuid
+  projectId   String   @map("project_id") @db.Uuid
+  environment String   @db.VarChar(20)
+  customerId  String   @map("customer_id") @db.Uuid
+  amountMinor BigInt   @map("amount_minor") @db.BigInt
+  currency    String   @db.VarChar(3)
+  status      String   @db.VarChar(20)
+  failureCode String?  @map("failure_code") @db.VarChar(50)
+  description String?  @db.VarChar(500)
+  createdAt   DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, environment])
+  @@index([customerId])
+  @@map("payments")
 }
 
 model ApiKey {
