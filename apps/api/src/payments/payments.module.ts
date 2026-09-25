@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { ApiKeysModule } from '../api-keys/api-keys.module';
+import { IdempotencyModule } from '../idempotency/idempotency.module';
 import { DEFAULT_SIMULATION_DELAYS, PAYMENT_DELAYS } from './payment-simulation';
 import { NoopPaymentEventSink, PAYMENT_EVENT_SINK } from './payment-events';
 import { PaymentsAccessGuard } from './payments-access.guard';
@@ -20,9 +21,12 @@ import { PaymentsService } from './payments.service';
  * module. The simulation delays are env-configurable via the shared
  * configuration (defaults in `DEFAULT_SIMULATION_DELAYS`) so tests run
  * deterministically.
+ *
+ * IdempotencyModule (phase 8) supplies the cross-cutting claim/replay
+ * capability that `payments.create` executes its mutation through.
  */
 @Module({
-  imports: [ApiKeysModule],
+  imports: [ApiKeysModule, IdempotencyModule],
   controllers: [PaymentsController],
   providers: [
     PaymentsService,

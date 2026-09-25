@@ -61,7 +61,7 @@ must be provided explicitly in the payload (`environment` field) or query filter
 - Critical mutations (payment creation, refund creation) accept an `Idempotency-Key` header.
 - The scope of a key is the tuple **(project, operation_scope, idempotency_key)**, where
   `operation_scope` identifies the specific idempotent operation (`payments.create`,
-  `refunds.create`; the catalog can grow in Phase 8).
+  `refunds.create`; the catalog can grow in later phases).
 - Within the retention window:
   - same project + same operation scope + same key → replay of the original stored response
     without re-executing the operation (ADR-0004);
@@ -69,10 +69,21 @@ must be provided explicitly in the payload (`environment` field) or query filter
     collide across operations of the same project).
 - **After 24 hours**, reuse of the same key is treated as a new operation.
 - The 24-hour retention window is a single configurable constant shared by storage and API
-  documentation (ADR-0004).
-- Concurrency-safe behavior is required (Phase 8).
+  documentation (ADR-0004, `IDEMPOTENCY_RETENTION_HOURS`).
+- Concurrency is handled by the database: the claim, the mutation and the stored response share one
+  transaction, so concurrent same-key retries produce exactly one side effect and every caller
+  observes the committed response (Phase 8).
+- Only **committed successful** responses are replayed. A request rejected by validation,
+  authentication, authorization or a business rule stores nothing, so the same key remains usable
+  by a later, correct request.
+- The project is part of the scope, not the authentication mode: the same key replayed through a
+  different authentication mode for the same project is still a replay.
+- A replayed response is served with the current request's `X-Request-Id`; request-scoped tracing
+  data of the original request is never replayed.
 - Idempotency behavior is documented and reflected in the OpenAPI contract
   (`Idempotency-Key` header on `payments.create` and `refunds.create`).
+- Consumer status: **`payments.create` is the first live consumer** (Phase 8); `refunds.create` is
+  the next planned consumer and reuses the same capability (Phase 9).
 
 ## 5. Pagination
 

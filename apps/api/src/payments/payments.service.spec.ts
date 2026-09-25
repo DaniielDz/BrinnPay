@@ -1,4 +1,10 @@
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  DEFAULT_IDEMPOTENCY_RETENTION_MS,
+  IdempotencyService,
+  type IdempotencyRequest,
+  type IdempotentExecution,
+} from '../idempotency/idempotency.service';
 import type { PaymentEvent, PaymentEventSink } from './payment-events';
 import { DEFAULT_SIMULATION_DELAYS, type SimulationDelays } from './payment-simulation';
 import type { PaymentRow } from './payment-types';
@@ -6,6 +12,7 @@ import type { PaymentsScope } from './payments-scope';
 import { PaymentsService } from './payments.service';
 
 const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
+const OTHER_PROJECT_ID = '0192f2a0-0000-7000-8000-0000000000ff';
 const CUSTOMER_ID = '0192f2a0-0000-7000-8000-00000000000c';
 const PAYMENT_ID = '0192f2a0-0000-7000-8000-00000000000d';
 
@@ -66,17 +73,79 @@ interface Sink {
   emit: jest.Mock;
 }
 
+interface IdempotencyStub {
+  execute: jest.Mock;
+  requests: IdempotencyRequest[];
+}
+
+/**
+ * Stand-in for the cross-cutting capability (phase 8). It records the request
+ * the payments module hands over and behaves like a first, non-replayed
+ * execution; claim/replay/expiry/concurrency are proved in
+ * `src/idempotency/*.spec.ts` and against PostgreSQL in
+ * `test/idempotency.e2e-spec.ts`.
+ */
+function idempotencyStub(prisma: unknown): IdempotencyStub {
+  const requests: IdempotencyRequest[] = [];
+  const execute = jest.fn(
+    async (request: IdempotencyRequest, run: (tx: unknown) => Promise<IdempotentExecution<unknown>>) => {
+      requests.push(request);
+      const execution = await run(prisma);
+      execution.afterCommit?.();
+      return { status: execution.status, body: execution.body, replayed: false };
+    },
+  );
+  return { execute, requests };
+}
+
 function setup(prisma: unknown, delays: SimulationDelays = DEFAULT_SIMULATION_DELAYS): {
   service: PaymentsService;
   sink: Sink;
+  idempotency: IdempotencyStub;
 } {
   const sink: Sink = { emit: jest.fn() };
+  const idempotency = idempotencyStub(prisma);
   const service = new PaymentsService(
     prisma as unknown as PrismaService,
     { emit: sink.emit } as unknown as PaymentEventSink,
     delays,
+    idempotency as unknown as PaymentsService['idempotency'],
   );
-  return { service, sink };
+  return { service, sink, idempotency };
+}
+
+/**
+ * Payments + the **real** idempotency capability over the same fake client.
+ * Used where the header rules and the claim/replay contract must hold across
+ * the module boundary (phase 8 §7.8, §7.2) rather than through a stub.
+ */
+function setupWithRealIdempotency(prisma: Record<string, unknown>) {
+  const sink: Sink = { emit: jest.fn() };
+  const idempotencyRecord = {
+    createMany: jest.fn(async () => ({ count: 1 })),
+    findUnique: jest.fn(async () => null),
+    // Typed call signature (Jest 29 two-generic form) so the stored response
+    // projection asserted below is type-safe.
+    update: jest.fn<
+      Promise<Record<string, never>>,
+      [{ data: { responseStatus: number; responseBody: Record<string, unknown> } }]
+    >(async () => ({})),
+    deleteMany: jest.fn(async () => ({ count: 0 })),
+  };
+  const tx = { ...prisma, idempotencyRecord };
+  const client = {
+    ...tx,
+    $transaction: jest.fn(async (fn: (client: unknown) => Promise<unknown>) => fn(tx)),
+  };
+  const service = new PaymentsService(
+    client as unknown as PrismaService,
+    { emit: sink.emit } as unknown as PaymentEventSink,
+    DEFAULT_SIMULATION_DELAYS,
+    new IdempotencyService(client as unknown as PrismaService, {
+      retentionMs: DEFAULT_IDEMPOTENCY_RETENTION_MS,
+    }),
+  );
+  return { service, sink, idempotencyRecord, client };
 }
 
 describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () => {
@@ -208,7 +277,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       }));
       const { service, sink } = setup(prisma);
 
-      const payment = await service.create(
+      const { body: payment } = await service.create(
         sessionScope(),
         { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
       );
@@ -281,7 +350,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
     });
 
     it('rejects an Idempotency-Key that is empty after trimming → 400 field error (D6)', async () => {
-      const { service } = setup(prisma);
+      const { service } = setupWithRealIdempotency(prisma as unknown as Record<string, unknown>);
 
       await expect(
         service.create(
@@ -294,10 +363,11 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         status: 400,
         details: { fields: [{ field: 'idempotency-key', errors: expect.any(Array) }] },
       });
+      expect(prisma.payment.create).not.toHaveBeenCalled();
     });
 
     it('rejects an Idempotency-Key longer than 255 characters → 400 field error (D6)', async () => {
-      const { service } = setup(prisma);
+      const { service } = setupWithRealIdempotency(prisma as unknown as Record<string, unknown>);
 
       await expect(
         service.create(
@@ -306,20 +376,141 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
           'k'.repeat(256),
         ),
       ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
+      expect(prisma.payment.create).not.toHaveBeenCalled();
     });
 
-    it('accepts a valid Idempotency-Key without using its value (D6)', async () => {
+    it('claims the key and stores the 201 Payment for replay through the real capability (phase 8 §4.3.1)', async () => {
       prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
       prisma.payment.create.mockResolvedValue(paymentRow());
-      const { service } = setup(prisma);
+      const { service, idempotencyRecord } = setupWithRealIdempotency(
+        prisma as unknown as Record<string, unknown>,
+      );
 
-      await expect(
-        service.create(
-          sessionScope(),
-          { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
-          'order_123',
+      const result = await service.create(
+        sessionScope(),
+        { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
+        'order_123',
+      );
+
+      expect(result.status).toBe(201);
+      expect(result.replayed).toBe(false);
+      expect(idempotencyRecord.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            projectId: PROJECT_ID,
+            operationScope: 'payments.create',
+            idempotencyKey: 'order_123',
+          }),
+          skipDuplicates: true,
+        }),
+      );
+      expect(idempotencyRecord.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ responseStatus: 201, responseBody: expect.any(Object) }),
+        }),
+      );
+      expect(idempotencyRecord.update.mock.calls[0][0].data.responseBody).toMatchObject({
+        id: PAYMENT_ID,
+        status: 'pending',
+        amount: '10.00',
+      });
+    });
+
+    it('executes the mutation through the idempotency capability under the payments.create scope (phase 8)', async () => {
+      prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
+      prisma.payment.create.mockResolvedValue(paymentRow());
+      const { service, idempotency } = setup(prisma);
+
+      const result = await service.create(
+        sessionScope(),
+        { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
+        ' order_123 ',
+      );
+
+      expect(idempotency.requests).toEqual([
+        { projectId: PROJECT_ID, operationScope: 'payments.create', key: ' order_123 ' },
+      ]);
+      expect(result).toMatchObject({ status: 201, replayed: false });
+      expect(result.body).toMatchObject({ status: 'pending' });
+    });
+
+    it('scopes the idempotency claim to the addressed project (ADR-0004, phase 8 §6.1)', async () => {
+      prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
+      prisma.payment.create.mockResolvedValue(paymentRow());
+      const { service, idempotency } = setup(prisma);
+
+      await service.create(
+        apiKeyScope('test', OTHER_PROJECT_ID),
+        { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
+        'order_123',
+      );
+
+      expect(idempotency.requests[0]).toMatchObject({ projectId: OTHER_PROJECT_ID });
+    });
+
+    it('emits payment.created only after the mutation commits, and never for a replay (phase 8 §10)', async () => {
+      prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
+      prisma.payment.create.mockResolvedValue(paymentRow());
+      const sink: Sink = { emit: jest.fn() };
+      const calls: string[] = [];
+      // The capability commits first, then runs the after-commit effects.
+      const idempotency = {
+        execute: jest.fn(
+          async (request: IdempotencyRequest, run: (tx: unknown) => Promise<IdempotentExecution<unknown>>) => {
+            const execution = await run(prisma);
+            expect(sink.emit).not.toHaveBeenCalled();
+            calls.push('committed');
+            execution.afterCommit?.();
+            return { status: execution.status, body: execution.body, replayed: false };
+          },
         ),
-      ).resolves.toMatchObject({ status: 'pending' });
+        requests: [],
+      };
+      const service = new PaymentsService(
+        prisma as unknown as PrismaService,
+        { emit: sink.emit } as unknown as PaymentEventSink,
+        DEFAULT_SIMULATION_DELAYS,
+        idempotency as unknown as PaymentsService['idempotency'],
+      );
+
+      await service.create(
+        sessionScope(),
+        { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
+        'order_123',
+      );
+
+      expect(calls).toEqual(['committed']);
+      expect(sink.emit).toHaveBeenCalledTimes(1);
+      expect(sink.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.created' }));
+    });
+
+    it('never runs the post-commit effect of a replayed execution (phase 8 §4.3.1)', async () => {
+      prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
+      prisma.payment.create.mockResolvedValue(paymentRow());
+      const sink: Sink = { emit: jest.fn() };
+      const stored = paymentRow();
+      const idempotency = {
+        // A committed record exists for this key: the capability replays it
+        // without running the mutation or its after-commit effects.
+        execute: jest.fn(async () => ({ status: 201, body: stored, replayed: true })),
+        requests: [],
+      };
+      const service = new PaymentsService(
+        prisma as unknown as PrismaService,
+        { emit: sink.emit } as unknown as PaymentEventSink,
+        DEFAULT_SIMULATION_DELAYS,
+        idempotency as unknown as PaymentsService['idempotency'],
+      );
+
+      const result = await service.create(
+        sessionScope(),
+        { environment: 'test', customer_id: CUSTOMER_ID, amount: '10.00', currency: 'usd' },
+        'order_123',
+      );
+
+      expect(result.replayed).toBe(true);
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+      expect(sink.emit).not.toHaveBeenCalled();
     });
 
     it('rejects a zero amount → 400 field error on amount (D7)', async () => {

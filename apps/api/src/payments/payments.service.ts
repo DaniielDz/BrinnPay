@@ -1,9 +1,14 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
 import { isUsd, parseAmountMinor } from '../common/money/money';
 import { uuidv7 } from '../common/uuid/uuid';
+import {
+  PAYMENTS_CREATE_SCOPE,
+  type IdempotencyOperationScope,
+} from '../idempotency/idempotency-operation';
+import { IdempotencyService, type IdempotentResult } from '../idempotency/idempotency.service';
 import {
   buildCursorPage,
   cursorToWhere,
@@ -34,6 +39,9 @@ import type { PaymentsScope } from './payments-scope';
 const PAYMENT_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Payment not found', 404);
 const CUSTOMER_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Customer not found', 404);
 
+/** The operation scope of this mutation (phase 8 §4.3.1, ADR-0004). */
+const OPERATION_SCOPE: IdempotencyOperationScope = PAYMENTS_CREATE_SCOPE;
+
 /**
  * Payments domain service (phase 7 §4.2/§4.6/§4.7).
  *
@@ -52,9 +60,12 @@ const CUSTOMER_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Customer not
  *   otherwise 404;
  * - the field rules: strictly-positive decimal-string amounts (D7) converted
  *   to integer minor units at the boundary (D8/ADR-0002), `usd`-only
- *   currency (ADR-0003), trimmed description (≤ 500, D9), and the
- *   `Idempotency-Key` header acceptance/validation (D6 — value deliberately
- *   unused in Phase 7);
+ *   currency (ADR-0003), and trimmed description (≤ 500, D9);
+ * - idempotency (phase 8): the `Idempotency-Key` header is validated and the
+ *   mutation is executed through the shared `IdempotencyService` under
+ *   operation scope `payments.create`, so a same-project, same-scope retry
+ *   inside the 24-hour window replays the stored 201 `Payment` instead of
+ *   creating a second payment or emitting a second `payment.created`;
  * - the default-success simulation (D2): payment creation arms the schedule
  *   (status `pending`); lazy, guarded, compare-and-set advancement on read
  *   (list and retrieve) — `pending → processing → succeeded`; `failed` is
@@ -70,6 +81,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     @Inject(PAYMENT_EVENT_SINK) private readonly events: PaymentEventSink,
     @Inject(PAYMENT_DELAYS) private readonly delays: SimulationDelays,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   /** List (§4.2): cursor-paginated payments of one project environment. The
@@ -100,58 +112,77 @@ export class PaymentsService {
    * Create (§4.2): a payment belongs to exactly one (project, environment)
    * and one customer of the addressed project (D3) — scoped per mode.
    * Session mode: `environment` is required in the body (DTO-enforced);
-   * API-key mode: it must equal the key's environment (else 422, D1). The
-   * `Idempotency-Key` header is accepted and validated (D6) but deliberately
-   * unused — repeated requests may create duplicate payments until Phase 8.
-   * The payment is created with `status = pending` and `payment.created` is
-   * emitted through the seam.
+   * API-key mode: it must equal the key's environment (else 422, D1).
+   *
+   * The whole mutation runs inside the idempotency capability (phase 8 §4.3.1)
+   * with operation scope `payments.create`: with a valid `Idempotency-Key` the
+   * payment is created at most once per (project, scope, key) within the
+   * 24-hour window — a retry replays the stored 201 body without a second
+   * payment row and without a second `payment.created` event — while an absent
+   * key behaves as a normal non-idempotent create. Authorization and request
+   * validation have already run in the guards and pipes; a mutation rejected
+   * here rolls its claim back, so the key is never poisoned.
+   *
+   * The event is emitted only after the transaction commits, so an event can
+   * never describe a payment that was rolled back (phase 8 §10).
    */
   async create(
     scope: PaymentsScope,
     dto: PaymentCreateDto,
     idempotencyKey?: string,
-  ): Promise<PaymentResponse> {
-    this.validateIdempotencyKey(idempotencyKey);
+  ): Promise<IdempotentResult<PaymentResponse>> {
+    return this.idempotency.execute<PaymentResponse>(
+      { projectId: scope.project_id, operationScope: OPERATION_SCOPE, key: idempotencyKey },
+      async (tx) => {
+        const environment = this.resolveCreateEnvironment(scope, dto.environment);
+        const amountMinor = parseAmountMinor(dto.amount);
+        this.requireUsd(dto.currency);
+        const description =
+          dto.description === undefined ? null : this.validateDescription(dto.description);
 
-    const environment = this.resolveCreateEnvironment(scope, dto.environment);
-    const amountMinor = parseAmountMinor(dto.amount);
-    this.requireUsd(dto.currency);
-    const description = dto.description === undefined ? null : this.validateDescription(dto.description);
+        // D3 (phase 6 §15): the customer must be visible in the addressed
+        // project (session) and, in API-key mode, in the key's environment —
+        // otherwise 404, indistinguishable from an unknown customer
+        // (non-disclosure).
+        const customer = await tx.customer.findFirst({
+          where: {
+            id: dto.customer_id,
+            projectId: scope.project_id,
+            ...(scope.mode === 'api_key' ? { environment } : {}),
+          },
+          select: { id: true },
+        });
+        if (!customer) {
+          throw CUSTOMER_NOT_FOUND();
+        }
 
-    // D3 (phase 6 §15): the customer must be visible in the addressed project
-    // (session) and, in API-key mode, in the key's environment — otherwise
-    // 404, indistinguishable from an unknown customer (non-disclosure).
-    const customer = await this.prisma.customer.findFirst({
-      where: {
-        id: dto.customer_id,
-        projectId: scope.project_id,
-        ...(scope.mode === 'api_key' ? { environment } : {}),
+        const now = new Date();
+        const payment = await tx.payment.create({
+          data: {
+            id: uuidv7(),
+            projectId: scope.project_id,
+            environment,
+            customerId: dto.customer_id,
+            amountMinor,
+            currency: dto.currency,
+            status: 'pending',
+            failureCode: null,
+            description,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        const event = this.paymentEvent('payment.created', payment, now);
+        return {
+          status: HttpStatus.CREATED,
+          body: toPaymentResponse(payment),
+          afterCommit: () => {
+            this.events.emit(event);
+          },
+        };
       },
-      select: { id: true },
-    });
-    if (!customer) {
-      throw CUSTOMER_NOT_FOUND();
-    }
-
-    const now = new Date();
-    const payment = await this.prisma.payment.create({
-      data: {
-        id: uuidv7(),
-        projectId: scope.project_id,
-        environment,
-        customerId: dto.customer_id,
-        amountMinor,
-        currency: dto.currency,
-        status: 'pending',
-        failureCode: null,
-        description,
-        createdAt: now,
-        updatedAt: now,
-      },
-    });
-
-    this.events.emit(this.paymentEvent('payment.created', payment, now));
-    return toPaymentResponse(payment);
+    );
   }
 
   /** Retrieve (§4.2): scoped to the addressed project; an API key can only
@@ -330,27 +361,8 @@ export class PaymentsService {
   }
 
   // -------------------------------------------------------------------------
-  // Field rules (D6/D7/D9)
+  // Field rules (D7/D9)
   // -------------------------------------------------------------------------
-
-  /** The header is accepted when present and must be non-empty (after
-   *  trimming) and ≤ 255 characters; its value is deliberately unused in
-   *  Phase 7 (D6 — Phase 8 owns replay/deduplication). */
-  private validateIdempotencyKey(key: string | undefined): void {
-    if (key === undefined) {
-      return;
-    }
-    if (key.trim().length === 0 || key.length > 255) {
-      throw ApiError.validation({
-        fields: [
-          {
-            field: 'idempotency-key',
-            errors: ['Idempotency-Key must be 1-255 characters'],
-          },
-        ],
-      });
-    }
-  }
 
   /** Defensive USD check (the DTO enum already rejects non-`usd` values at
    *  the boundary — ADR-0003). */

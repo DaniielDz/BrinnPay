@@ -1141,12 +1141,18 @@ paths:
         Creates a simulated payment in a project environment (created with
         `status: pending` and advanced automatically by the simulation). This
         is a critical mutation: it accepts the `Idempotency-Key` header with
-        operation scope `payments.create` (ADR-0004 — accepted and validated
-        in this phase; replay/deduplication lands with the idempotency records
-        phase). With API-key authentication the environment is derived from
-        the key and must match the payload (422 otherwise). The `customer_id`
-        must be a customer of the same project (and, for API keys, the same
-        environment); unknown or cross-scope customers are a 404.
+        operation scope `payments.create` (ADR-0004) and **replays** it — the
+        first successful call stores its `201 Payment` response for 24 hours
+        per `(project, payments.create, key)`, and any later call with the same
+        key returns that stored response without creating a second payment
+        (concurrency-safe, Phase 8). Only committed successful responses are
+        replayed, so a request that fails validation, authorization or the
+        business rules leaves no stored record and the key stays reusable. A
+        key reused after the 24-hour window is treated as a new operation. With
+        API-key authentication the environment is derived from the key and must
+        match the payload (422 otherwise). The `customer_id` must be a customer
+        of the same project (and, for API keys, the same environment); unknown
+        or cross-scope customers are a 404.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1862,9 +1868,15 @@ components:
         same operation within the 24-hour retention window returns the original
         stored response without re-executing the operation; the same key against
         a different operation scope is an independent operation; reuse after
-        expiry is treated as a new operation.
+        expiry is treated as a new operation. Live consumers: `payments.create`.
+        Next planned consumer: `refunds.create`. Only committed successful
+        responses are replayed, and a replayed response carries the current
+        request's `X-Request-Id`, never the stored one. Values are trimmed and
+        must be 1-255 characters; an invalid value is a 400.
       schema:
         type: string
+        minLength: 1
+        maxLength: 255
 
   requestBodies:
     RegisterBody:

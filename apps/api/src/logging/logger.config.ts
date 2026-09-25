@@ -10,18 +10,22 @@ export const REDACT_CENSOR = '[REDACTED]';
 /**
  * Redaction paths applied to every log line from day one (phase 1 §10). Full
  * request bodies are redacted; passwords, API keys, webhook secrets, tokens,
- * and card-like payloads must never be written to logs — at any nesting level
- * (paths are declared for both the top-level key and a wildcard position).
+ * idempotency keys, and card-like payloads must never be written to logs — at
+ * any nesting level (paths are declared for both the top-level key and a
+ * wildcard position).
  *
- * Note: `idempotency-key` is intentionally not redacted here; in Phase 2 no
- * endpoint uses idempotency keys yet, and the decision (ADR-0004) reserves
- * them for the phases that introduce idempotent mutations.
+ * `idempotency-key` is redacted since Phase 8: `payments.create` is a live
+ * idempotent consumer, so the header is client-identifying retry data that must
+ * not reach structured logs, error messages, request logs, or audit logs
+ * (phase 8 §6.6). It was not redacted before because no endpoint used
+ * idempotency keys yet.
  */
 export const REDACT_PATHS: string[] = [
   'req.body',
   'req.headers.authorization',
   'req.headers.cookie',
   'req.headers["x-api-key"]',
+  'req.headers["idempotency-key"]',
   'res.headers["set-cookie"]',
   'password',
   '*.password',
@@ -41,6 +45,10 @@ export const REDACT_PATHS: string[] = [
   '*.api_key',
   'apiKey',
   '*.apiKey',
+  'idempotency-key',
+  '*.idempotency-key',
+  'idempotency_key',
+  '*.idempotency_key',
   'authorization',
   '*.authorization',
   'card',

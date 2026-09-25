@@ -8,8 +8,10 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 
 import type { CursorPage } from '../organizations/cursor';
 import { RequireCapability } from '../organizations/org-rbac.guard';
@@ -32,6 +34,11 @@ import type { PaymentResponse } from './payment-types';
  *
  * All `api-key`-scoped data access is further pinned to the key's environment
  * inside `PaymentsService` (404 cross-environment, 422 explicit mismatches).
+ *
+ * `payments.create` is the first idempotent consumer (phase 8): the optional
+ * `Idempotency-Key` header is validated, and a same-project retry inside the
+ * 24-hour window replays the stored 201 `Payment` body without creating a
+ * second payment.
  */
 @Controller('projects/:project_id/payments')
 export class PaymentsController {
@@ -51,12 +58,18 @@ export class PaymentsController {
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(PaymentsAccessGuard)
   @RequireCapability({ capability: 'payments.create' })
-  create(
+  async create(
     @PaymentsScope() scope: PaymentsScopeValue,
     @Body() dto: PaymentCreateDto,
+    @Res({ passthrough: true }) response: Response,
     @Headers('idempotency-key') idempotencyKey?: string,
   ): Promise<PaymentResponse> {
-    return this.payments.create(scope, dto, idempotencyKey);
+    // The status comes from the idempotency capability, so a replayed retry
+    // answers with the stored status of the original execution (phase 8 §4.2.4,
+    // §4.3.2) instead of recomputing it.
+    const result = await this.payments.create(scope, dto, idempotencyKey);
+    response.status(result.status);
+    return result.body;
   }
 
   @Get(':payment_id')
