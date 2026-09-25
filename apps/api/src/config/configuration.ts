@@ -29,6 +29,9 @@ export interface BrinnPayConfig {
     pendingDelayMs: number;
     settlementDelayMs: number;
   };
+  idempotency: {
+    retentionHours: number;
+  };
 }
 
 const DEFAULT_DATABASE_URL = 'postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public';
@@ -52,6 +55,11 @@ const DEFAULT_IP_READ_MAX = 100;
 // Env-driven so tests run with near-zero delays (deterministic, fast CI).
 const DEFAULT_PAYMENT_PENDING_DELAY_MS = 1_000;
 const DEFAULT_PAYMENT_SETTLEMENT_DELAY_MS = 2_000;
+
+// Phase 8 idempotency retention (ADR-0004): 24 hours is the single constant
+// shared by storage and the API documentation. Expressed in hours because the
+// documented window is; the capability converts it to milliseconds.
+const DEFAULT_IDEMPOTENCY_RETENTION_HOURS = 24;
 
 function parsePort(raw: string | undefined, fallback: number): number {
   const value = raw === undefined || raw === '' ? Number(fallback) : Number(raw);
@@ -209,6 +217,13 @@ export function loadConfiguration(): BrinnPayConfig {
         process.env.PAYMENT_SETTLEMENT_DELAY_MS,
         DEFAULT_PAYMENT_SETTLEMENT_DELAY_MS,
         'PAYMENT_SETTLEMENT_DELAY_MS',
+      ),
+    },
+    idempotency: {
+      retentionHours: parsePositiveInt(
+        process.env.IDEMPOTENCY_RETENTION_HOURS,
+        DEFAULT_IDEMPOTENCY_RETENTION_HOURS,
+        'IDEMPOTENCY_RETENTION_HOURS',
       ),
     },
   };

@@ -84,6 +84,18 @@ model Organization {
 // (project deletion removes its customers); the composite (project, environment)
 // index serves the environment-scoped list scans.
 
+// Phase 8 (ADR-0011): idempotency records. `idempotency_records` is **internal
+// infrastructure** for the cross-cutting idempotency capability (phase 8 §4):
+// it stores the API response projection of a committed mutation so a retry of
+// the same key replays it instead of re-executing the side effect. The table is
+// deliberately operation-agnostic — the unique tuple
+// (project_id, operation_scope, idempotency_key) is what scopes a key
+// (ADR-0004), so `refunds.create` (Phase 9) needs no schema change. FK to
+// `projects` ON DELETE CASCADE (idempotency is project-scoped; project deletion
+// removes its records). `response_status`/`response_body` are nullable because
+// the claim row is inserted before the mutation runs and completed by an update
+// **inside the same transaction** (phase 8 §4.4 — atomic failure handling).
+
 // Phase 7 (ADR-0011): payments. `payments` is the simulated payment operation
 // (ADR-0008-derived, no real money): scoped to exactly one project and one
 // environment (`test`/`live`, app-validated) and to one customer of the same
@@ -105,10 +117,11 @@ model Project {
   createdAt      DateTime @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @map("updated_at") @db.Timestamptz(3)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  apiKeys      ApiKey[]
-  customers    Customer[]
-  payments     Payment[]
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  apiKeys            ApiKey[]
+  customers          Customer[]
+  payments           Payment[]
+  idempotencyRecords IdempotencyRecord[]
 
   @@index([organizationId])
   @@map("projects")
@@ -151,6 +164,32 @@ model Payment {
   @@index([projectId, environment])
   @@index([customerId])
   @@map("payments")
+}
+
+// Idempotency records (phase 8 §5). Internal infrastructure — no public API
+// resource (phase 1 §13.2.2). `operation_scope` holds catalog values such as
+// `payments.create` and `refunds.create` (string-based, app-owned); the stored
+// body is the API response projection (not a row dump), so replay stays
+// contract-correct. The compound unique index is what enforces one active
+// record per (project, operation scope, key) and backs the atomic claim
+// (phase 8 §4.4); `expires_at` (`created_at` + 24h, ADR-0004) drives expiry and
+// the request-path reuse rule plus the bounded-storage cleanup.
+model IdempotencyRecord {
+  id             String   @id @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  operationScope String   @map("operation_scope") @db.VarChar(100)
+  idempotencyKey String   @map("idempotency_key") @db.VarChar(255)
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body") @db.JsonB
+  createdAt      DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @map("updated_at") @db.Timestamptz(3)
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, operationScope, idempotencyKey])
+  @@index([expiresAt])
+  @@map("idempotency_records")
 }
 
 model ApiKey {

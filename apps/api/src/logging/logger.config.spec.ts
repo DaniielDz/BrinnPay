@@ -83,6 +83,25 @@ describe('logging base — secure redaction (phase 2 §4.2, §9.2)', () => {
     expect(output).not.toContain('sk_live_abcdef');
     expect(output).not.toContain('rt_secret');
   });
+
+  it('never emits an Idempotency-Key in plaintext (phase 8 §6.6)', () => {
+    const { logger, lines } = createCaptureLogger();
+
+    logger.info({
+      req: {
+        method: 'POST',
+        url: '/api/v1/projects/0192f2a0-0000-7000-8000-00000000000b/payments',
+        headers: { 'idempotency-key': 'order_client_key_do_not_log' },
+      },
+    });
+    logger.info({ 'idempotency-key': 'order_client_key_do_not_log' });
+    logger.info({ idempotency_key: 'order_client_key_do_not_log' });
+    logger.info({ payload: { idempotency_key: 'order_client_key_do_not_log' } });
+
+    const output = lines.join('\n');
+    expect(output).toContain(REDACT_CENSOR);
+    expect(output).not.toContain('order_client_key_do_not_log');
+  });
 });
 
 describe('buildLoggerOptions (D3)', () => {
