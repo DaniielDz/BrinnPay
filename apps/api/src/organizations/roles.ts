@@ -27,6 +27,10 @@ export const CAPABILITIES = {
   API_KEYS_READ: 'apiKeys.read',
   API_KEYS_CREATE: 'apiKeys.create',
   API_KEYS_REVOKE: 'apiKeys.revoke',
+  CUSTOMERS_READ: 'customers.read',
+  CUSTOMERS_CREATE: 'customers.create',
+  CUSTOMERS_UPDATE: 'customers.update',
+  CUSTOMERS_DELETE: 'customers.delete',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -57,6 +61,13 @@ const MATRIX: Record<Capability, readonly Role[]> = {
   [CAPABILITIES.API_KEYS_READ]: ['owner', 'admin', 'member', 'viewer'],
   [CAPABILITIES.API_KEYS_CREATE]: ['owner', 'admin'],
   [CAPABILITIES.API_KEYS_REVOKE]: ['owner', 'admin'],
+  // Phase 6 matrix (§4.3, D5): customer data is project data — reading is
+  // available to every member role; mutating customers is administrative
+  // (owner + admin), following the Phase 5 project-resources pattern.
+  [CAPABILITIES.CUSTOMERS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.CUSTOMERS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.CUSTOMERS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.CUSTOMERS_DELETE]: ['owner', 'admin'],
 };
 
 export function isRole(value: string): value is Role {

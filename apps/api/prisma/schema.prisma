@@ -76,6 +76,14 @@ model Organization {
 // from their tenant: organization deletion removes projects and their keys
 // (D7); project deletion removes its keys.
 
+// Phase 6 (ADR-0011): customers. `customers` is the developer-managed customer
+// record (ADR-0008): an API-level entity scoped to exactly one project and one
+// environment (`test`/`live` — app-validated, D10 pattern) with duplicate
+// emails permitted (D1: identity is the UUIDv7 id) and a flat string-map
+// `metadata` (D6; `{}` when absent). FK to `projects` with ON DELETE CASCADE
+// (project deletion removes its customers); the composite (project, environment)
+// index serves the environment-scoped list scans.
+
 model Project {
   id             String   @id @db.Uuid
   organizationId String   @map("organization_id") @db.Uuid
@@ -85,9 +93,27 @@ model Project {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   apiKeys      ApiKey[]
+  customers    Customer[]
 
   @@index([organizationId])
   @@map("projects")
+}
+
+model Customer {
+  id          String   @id @db.Uuid
+  projectId   String   @map("project_id") @db.Uuid
+  environment String   @db.VarChar(20)
+  email       String   @db.VarChar(320)
+  name        String?  @db.VarChar(200)
+  metadata    Json?    @db.JsonB
+  createdAt   DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([projectId, environment])
+  @@map("customers")
 }
 
 model ApiKey {

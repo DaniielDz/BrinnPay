@@ -58,7 +58,11 @@ the auth pages.
   **once-only** plaintext display (the credential appears in exactly one create
   response and is never shown again), revoke with confirmation, and rotate
   (create-then-revoke, D1) for owner/admin; non-members see the not-found state.
-- `/dashboard/projects/[projectId]/customers`
+- `/dashboard/projects/[projectId]/customers` — customer management (Phase 6 §5.1):
+  environment-scoped list (from the shell selector; TEST/LIVE data is never
+  mixed) with debounced search and cursor pagination; create / edit / delete for
+  owner/admin (capability matrix §4.3) via the customers API; member/viewer keep
+  the read-only list and detail; non-members see the not-found state.
 - `/dashboard/projects/[projectId]/payments`
 - `/dashboard/projects/[projectId]/refunds`
 - `/dashboard/projects/[projectId]/webhooks`

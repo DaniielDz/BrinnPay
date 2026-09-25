@@ -898,6 +898,13 @@ paths:
       description: |
         Lists the customers of a project environment with cursor pagination and
         optional search. TEST and LIVE data is never mixed (phase 1 §8).
+
+        With session authentication the `environment` query parameter is
+        required (400 `VALIDATION_ERROR` when missing). With API-key
+        authentication the environment is derived from the key and an explicit
+        conflicting value is rejected (422 `BUSINESS_RULE_VIOLATION`).
+        `search` matches `email` and `name` case-insensitively as a substring
+        (D3).
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -925,6 +932,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/BusinessRuleViolation"
         "429":
           $ref: "#/components/responses/RateLimited"
     post:
@@ -934,7 +943,15 @@ paths:
       description: |
         Creates a customer record in a project environment. With API-key
         authentication the environment is derived from the key and must match
-        the payload; with session authentication it must be provided explicitly.
+        the payload (mismatch → 422 `BUSINESS_RULE_VIOLATION`); with session
+        authentication it must be provided explicitly (missing → 400
+        `VALIDATION_ERROR`).
+
+        Emails are trimmed and lowercased before storage and are **not**
+        unique (D1): customers are identified by their UUIDv7 id, and multiple
+        customers may share an email within a project/environment. Metadata
+        (when provided) is a flat string map: string keys ≤ 40 chars, string
+        values ≤ 500 chars, ≤ 50 entries; absent → `{}` (D4).
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -970,7 +987,12 @@ paths:
       tags: [customers]
       operationId: customers.retrieve
       summary: Retrieve a customer
-      description: Returns a customer record within its project and environment.
+      description: |
+        Returns a customer record within its project and environment. With
+        API-key authentication the key's (project, environment) scope applies:
+        a customer of a different project, or of another environment of the
+        same project, is indistinguishable from a non-existent one (404,
+        non-disclosure).
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1000,8 +1022,13 @@ paths:
       operationId: customers.update
       summary: Update a customer
       description: |
-        Updates customer attributes. The environment of a customer is immutable
-        after creation.
+        Updates customer attributes (partial update: only provided fields
+        change; a PATCH with no changed values is a no-op returning the current
+        state). The environment of a customer is immutable after creation.
+
+        `name` cannot be cleared to null in the MVP (D7): it is a non-nullable
+        string in the contract; a PATCH omitting it leaves it unchanged.
+        `metadata` replaces the whole map — no merging (D4).
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1792,9 +1819,14 @@ components:
       name: search
       in: query
       required: false
-      description: Free-text search across supported customer fields (refined in Phase 6).
+      description: |
+        Free-text search (Phase 6, D3): case-insensitive substring match across
+        the customer `email` and `name` fields, composed with the environment
+        filter and cursor pagination. An empty or whitespace-only term is
+        treated as absent. No relevance ranking in the MVP.
       schema:
         type: string
+        maxLength: 200
     Environment:
       name: environment
       in: query
@@ -2369,12 +2401,21 @@ components:
         email:
           type: string
           format: email
+          description: |
+            Normalized (trimmed + lowercased) customer email. Not unique
+            (D1): multiple customers may share an email within a
+            project/environment.
         name:
           type: [string, "null"]
+          description: Optional customer name; null when never provided (D7).
         metadata:
           type: object
-          additionalProperties: true
-          description: Optional developer-defined key/value metadata.
+          additionalProperties:
+            type: string
+          description: |
+            Developer-defined flat string-map metadata (D4): string keys
+            ≤ 40 chars, string values ≤ 500 chars, ≤ 50 entries. Always an
+            object in responses — absent at creation → `{}`.
         created_at:
           type: string
           format: date-time
@@ -2390,27 +2431,48 @@ components:
           $ref: "#/components/schemas/Environment"
           description: |
             The project environment the customer belongs to. With API-key
-            authentication it must match the key's environment.
+            authentication it must match the key's environment (mismatch →
+            422 `BUSINESS_RULE_VIOLATION`); with session authentication it is
+            required (missing → 400 `VALIDATION_ERROR`).
         email:
           type: string
           format: email
+          description: |
+            Customer email, trimmed and lowercased before storage. Not unique
+            (D1).
         name:
           type: string
+          description: Optional non-empty customer name (≤ 200 chars, trimmed).
         metadata:
           type: object
-          additionalProperties: true
+          additionalProperties:
+            type: string
+          description: |
+            Optional flat string-map metadata (D4): string keys ≤ 40 chars,
+            string values ≤ 500 chars, ≤ 50 entries; absent → `{}`.
 
     CustomerUpdate:
       type: object
+      description: |
+        Partial update — only provided fields change. The environment of a
+        customer is immutable after creation; `name` cannot be cleared to
+        null (D7); `metadata` replaces the whole map (D4).
       properties:
         email:
           type: string
           format: email
+          description: New email (trimmed + lowercased before storage).
         name:
           type: string
+          description: New non-empty name (≤ 200 chars, trimmed); not null-clearing (D7).
         metadata:
           type: object
-          additionalProperties: true
+          additionalProperties:
+            type: string
+          description: |
+            Replacement flat string-map metadata (D4): string keys ≤ 40
+            chars, string values ≤ 500 chars, ≤ 50 entries. Replaces the
+            current map wholesale — no merging.
 
     Payment:
       type: object
