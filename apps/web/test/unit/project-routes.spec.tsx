@@ -3,17 +3,16 @@ import { describe, expect, it } from 'vitest';
 
 import ProjectLogsAuditPage from '../../app/(dashboard)/dashboard/projects/[projectId]/logs/audit/page';
 import ProjectLogsRequestsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/logs/requests/page';
-import ProjectPaymentsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/payments/page';
 import ProjectRefundsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/refunds/page';
 import ProjectWebhooksPage from '../../app/(dashboard)/dashboard/projects/[projectId]/webhooks/page';
 
 describe('project route skeleton (phase 2 §5.2)', () => {
-  // `projects/[projectId]`, `projects/[projectId]/api-keys` (Phase 5) and
-  // `projects/[projectId]/customers` (Phase 6) are data-driven; the remaining
+  // `projects/[projectId]`, `projects/[projectId]/api-keys` (Phase 5),
+  // `projects/[projectId]/customers` (Phase 6) and
+  // `projects/[projectId]/payments` (Phase 7) are data-driven; the remaining
   // environment-scoped child routes keep their placeholders until their
-  // owning phases (7+).
+  // owning phases (8+).
   const cases = [
-    { Component: ProjectPaymentsPage, heading: 'Payments' },
     { Component: ProjectRefundsPage, heading: 'Refunds' },
     { Component: ProjectWebhooksPage, heading: 'Webhooks' },
     { Component: ProjectLogsRequestsPage, heading: 'Request logs' },

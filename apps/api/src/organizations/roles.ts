@@ -31,6 +31,8 @@ export const CAPABILITIES = {
   CUSTOMERS_CREATE: 'customers.create',
   CUSTOMERS_UPDATE: 'customers.update',
   CUSTOMERS_DELETE: 'customers.delete',
+  PAYMENTS_READ: 'payments.read',
+  PAYMENTS_CREATE: 'payments.create',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -68,6 +70,11 @@ const MATRIX: Record<Capability, readonly Role[]> = {
   [CAPABILITIES.CUSTOMERS_CREATE]: ['owner', 'admin'],
   [CAPABILITIES.CUSTOMERS_UPDATE]: ['owner', 'admin'],
   [CAPABILITIES.CUSTOMERS_DELETE]: ['owner', 'admin'],
+  // Phase 7 matrix (§4.3, D5): payments are project data — reading is
+  // available to every member role; creating payments is administrative
+  // (owner + admin), following the Phase 5/6 project-resources pattern.
+  [CAPABILITIES.PAYMENTS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.PAYMENTS_CREATE]: ['owner', 'admin'],
 };
 
 export function isRole(value: string): value is Role {
