@@ -6,6 +6,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from './auth/auth.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { ApiExceptionFilter } from './common/errors/api-exception.filter';
+import { CustomersModule } from './customers/customers.module';
 import loadConfiguration from './config/configuration';
 import { HealthModule } from './health/health.module';
 import { buildLoggerOptions } from './logging/logger.config';
@@ -15,11 +16,11 @@ import { ProjectsModule } from './projects/projects.module';
 import { RedisModule } from './redis/redis.module';
 
 /**
- * Root application module (Phase 5). Wires the base cross-cutting
+ * Root application module (Phase 6). Wires the base cross-cutting
  * infrastructure (configuration, structured logging, Prisma, Redis, health
  * checks, the global error envelope) together with the auth, organizations,
- * projects, and api-keys domain modules. Remaining domain modules arrive with
- * their owning phases (6–13).
+ * projects, api-keys, and customers domain modules. Remaining domain modules
+ * arrive with their owning phases (7–13).
  */
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { RedisModule } from './redis/redis.module';
     OrganizationsModule,
     ProjectsModule,
     ApiKeysModule,
+    CustomersModule,
   ],
   providers: [
     {

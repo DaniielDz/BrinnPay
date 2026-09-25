@@ -1,11 +1,13 @@
 /**
- * Minimal BrinnPay API client for the browser (phases 3–4: session auth and
- * the organizations/RBAC surface).
+ * Minimal BrinnPay API client for the browser (phases 3–6: session auth, the
+ * organizations/RBAC surface, projects, API keys, and customers).
  *
  * The refresh cookie is `HttpOnly` and scoped to `/api/v1/auth`, so it travels
  * automatically with these requests; the access token is kept in memory by the
  * caller on `AuthProvider`. Org-scoped requests pass the token explicitly via
- * `Authorization` (phase 4 §4.3; API keys arrive in Phase 5).
+ * `Authorization` (phase 4 §4.3; API keys arrive in Phase 5; customers in
+ * Phase 6 — the dashboard always talks to the API with a session JWT, never
+ * with an API key).
  *
  * `NEXT_PUBLIC_API_BASE_URL` allows pointing at the API (e.g.
  * `http://localhost:3000/api/v1` during local development). Defaults to the
@@ -435,6 +437,109 @@ export function createApiKey(
 
 export function revokeApiKey(accessToken: string, projectId: string, apiKeyId: string): Promise<void> {
   return apiFetch<void>(`/projects/${projectId}/api-keys/${apiKeyId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Customers (phase 6 §4.2/§5.2)
+// ---------------------------------------------------------------------------
+
+/** `Customer` as contracted (phase 6 §4.2): identity is the UUIDv7 `id`;
+ *  duplicate emails are permitted within a project/environment (D1). */
+export interface Customer {
+  id: string;
+  project_id: string;
+  environment: Environment;
+  email: string;
+  name: string | null;
+  metadata: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `CustomerCreate` (phase 6 §4.2): `environment` is required — the page
+ *  always passes the shell-selected environment (TEST/LIVE data is never
+ *  mixed, D2). `name`/`metadata` are optional; `metadata` is a flat string
+ *  map (D6). */
+export interface CreateCustomerInput {
+  environment: Environment;
+  email: string;
+  name?: string;
+  metadata?: Record<string, string>;
+}
+
+/** `CustomerUpdate` (phase 6 §4.2): partial update of `email`/`name`/
+ *  `metadata` — only provided fields change. The contract rejects explicit
+ *  `null` (MVP: clearing `name` is unsupported, D7), so callers omit a
+ *  cleared/empty field rather than sending `null`. */
+export interface UpdateCustomerInput {
+  email?: string;
+  name?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface ListCustomersQuery {
+  environment?: Environment;
+  search?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export function listCustomers(
+  accessToken: string,
+  projectId: string,
+  query: ListCustomersQuery = {},
+): Promise<CursorPage<Customer>> {
+  const params = new URLSearchParams();
+  if (query.environment !== undefined) params.set('environment', query.environment);
+  if (query.search) params.set('search', query.search);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  const suffix = params.size > 0 ? `?${params}` : '';
+  return apiFetch<CursorPage<Customer>>(`/projects/${projectId}/customers${suffix}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function createCustomer(
+  accessToken: string,
+  projectId: string,
+  input: CreateCustomerInput,
+): Promise<Customer> {
+  return apiFetch<Customer>(`/projects/${projectId}/customers`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function retrieveCustomer(
+  accessToken: string,
+  projectId: string,
+  customerId: string,
+): Promise<Customer> {
+  return apiFetch<Customer>(`/projects/${projectId}/customers/${customerId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function updateCustomer(
+  accessToken: string,
+  projectId: string,
+  customerId: string,
+  input: UpdateCustomerInput,
+): Promise<Customer> {
+  return apiFetch<Customer>(`/projects/${projectId}/customers/${customerId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteCustomer(accessToken: string, projectId: string, customerId: string): Promise<void> {
+  return apiFetch<void>(`/projects/${projectId}/customers/${customerId}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${accessToken}` },
   });

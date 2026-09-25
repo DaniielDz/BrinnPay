@@ -71,6 +71,21 @@ describe('roles / permission matrix (phase 4 §4.3, D2/D3)', () => {
     }
   });
 
+  it('phase 6: customers.read is granted to every member role (§4.3, D5)', () => {
+    for (const role of ['owner', 'admin', 'member', 'viewer'] as const) {
+      expect(can(role, 'customers.read')).toBe(true);
+    }
+  });
+
+  it('phase 6: customers.create/update/delete are owner+admin only (§4.3, D5)', () => {
+    for (const capability of ['customers.create', 'customers.update', 'customers.delete'] as const) {
+      expect(can('owner', capability)).toBe(true);
+      expect(can('admin', capability)).toBe(true);
+      expect(can('member', capability)).toBe(false);
+      expect(can('viewer', capability)).toBe(false);
+    }
+  });
+
   it('isDownward reflects the strict owner > admin > member > viewer ordering', () => {
     expect(isDownward('owner', 'admin')).toBe(true);
     expect(isDownward('admin', 'member')).toBe(true);
