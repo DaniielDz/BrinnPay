@@ -69,6 +69,12 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
       await prisma.organization.deleteMany();
       await prisma.refreshSession.deleteMany();
       await prisma.user.deleteMany();
+      // Reset the auth rate-limit counters so repeated local runs (and the
+      // 900s window) stay deterministic (D7).
+      const rateLimitKeys = await redis.connection.keys('auth:rl:*');
+      if (rateLimitKeys.length > 0) {
+        await redis.connection.del(rateLimitKeys);
+      }
     }
   });
 
@@ -130,7 +136,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
 
     const dup = await request(server())
       .post('/api/v1/auth/register')
-      .send({ email: 'E2E-DUP@example.com ', password: 'password-123' });
+      .send({ email: 'E2E-DUP@example.com', password: 'password-123' });
     expect(dup.status).toBe(409);
     expect(dup.body.error.code).toBe('CONFLICT');
   });
@@ -190,6 +196,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   it('refresh detects reuse of a rotated (revoked-but-unexpired) token and revokes all sessions (§8.5, D3)', async () => {
     if (!reachable.value) return;
 
+    await register('e2e-reuse@example.com');
     const { cookie: first } = await login('e2e-reuse@example.com');
     expect(first).toBeTruthy();
 

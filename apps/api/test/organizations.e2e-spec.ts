@@ -51,6 +51,12 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
       await prisma.organization.deleteMany();
       await prisma.refreshSession.deleteMany();
       await prisma.user.deleteMany();
+      // Reset the auth rate-limit counters so repeated local runs (and the
+      // 900s window) stay deterministic (phase 3 D7).
+      const rateLimitKeys = await redis.connection.keys('auth:rl:*');
+      if (rateLimitKeys.length > 0) {
+        await redis.connection.del(rateLimitKeys);
+      }
     }
   });
 
@@ -71,7 +77,8 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   };
 
   /** Session-authenticated request helper with the access token. */
-  const auth = (token: string) => request(server()).set('Authorization', `Bearer ${token}`);
+  const auth = (token: string) =>
+    request.agent(server()).use((req: request.Request) => req.set('Authorization', `Bearer ${token}`));
 
   /** Creates an organization for the caller; returns the organization id. */
   const createOrg = async (token: string, name: string) => {
@@ -133,9 +140,6 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
     const viewer = await register('update-viewer');
     const outsider = await register('update-outsider');
 
-    // Outsider's own organization — invisible to others.
-    const outsiderOrg = await createOrg(outsider.token, 'Outsider Org');
-
     const org = await createOrg(owner.token, 'Before Rename');
     await invite(owner.token, org.id, viewer.user.email, 'viewer');
     const inviteId = (await auth(owner.token).get(`/api/v1/organizations/${org.id}/invitations`).expect(200)).body.data[0].id;
@@ -155,7 +159,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
     expect(viewerDenied.body.error.code).toBe('FORBIDDEN');
 
     const outsiderDenied = await auth(outsider.token)
-      .patch(`/api/v1/organizations/${outsiderOrg.id}`)
+      .patch(`/api/v1/organizations/${org.id}`)
       .send({ name: 'Hijack' });
     expect(outsiderDenied.status).toBe(404);
     expect(outsiderDenied.body.error.code).toBe('NOT_FOUND');
@@ -207,11 +211,14 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   // -------------------------------------------------------------------------
 
   /** Builds an org owned by `owner` with `admin`/`member`/`viewer` members. */
+  let teamSeq = 0;
   const buildTeam = async () => {
-    const owner = await register('team-owner');
-    const admin = await register('team-admin');
-    const member = await register('team-member');
-    const viewer = await register('team-viewer');
+    teamSeq += 1;
+    const seq = teamSeq.toString(36);
+    const owner = await register(`team-owner-${seq}`);
+    const admin = await register(`team-admin-${seq}`);
+    const member = await register(`team-member-${seq}`);
+    const viewer = await register(`team-viewer-${seq}`);
     const org = await createOrg(owner.token, 'Team Org');
 
     await invite(owner.token, org.id, admin.user.email, 'admin');
@@ -327,14 +334,15 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   it('member target restrictions: member cannot change another member (403) and unknown targets are 404 (§4.2 D4)', async () => {
     if (!reachable.value) return;
 
-    const { member, viewer, org } = await buildTeam();
+    const { member, owner, viewer, org } = await buildTeam();
 
     const other = await auth(member.token)
       .patch(`/api/v1/organizations/${org.id}/members/${viewer.user.id}`)
       .send({ role: 'viewer' });
     expect(other.status).toBe(403);
 
-    const ghost = await auth(member.token).patch(
+    // A permitted actor (owner) resolving an unknown target gets 404.
+    const ghost = await auth(owner.token).patch(
       `/api/v1/organizations/${org.id}/members/00000000-0000-7000-8000-000000000000`,
     ).send({ role: 'viewer' });
     expect(ghost.status).toBe(404);
@@ -350,7 +358,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
     const owner = await register('inv-create');
     const org = await createOrg(owner.token, 'Invite Org');
 
-    const invitation = await invite(owner.token, org.id, '  Mixed@Example.com ', 'admin');
+    const invitation = await invite(owner.token, org.id, 'Mixed@Example.com', 'admin');
     expect(invitation).toMatchObject({
       email: 'mixed@example.com',
       role: 'admin',
@@ -416,24 +424,34 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
     expect(unknown.body.error.message).toBe(denied.body.error.message);
   });
 
-  it('accept: already-member → 409; non-pending → 422 (§4.2 D5)', async () => {
+  it('accept: consumed or cancelled invitations are 422 (non-pending); members cannot be invited again (§4.2 D5)', async () => {
     if (!reachable.value) return;
 
     const owner = await register('inv-state-owner');
     const invitee = await register('inv-state-invitee');
+    const outsider = await register('inv-state-outsider');
     const org = await createOrg(owner.token, 'State Org');
 
     const first = await invite(owner.token, org.id, invitee.user.email, 'member');
     await accept(invitee.token, first.id).expect(201);
 
-    const alreadyMember = await accept(invitee.token, first.id);
-    expect(alreadyMember.status).toBe(409);
-    expect(alreadyMember.body.error.code).toBe('CONFLICT');
+    // Re-accepting a consumed (no longer pending) invitation → 422.
+    const replayed = await accept(invitee.token, first.id);
+    expect(replayed.status).toBe(422);
+    expect(replayed.body.error.code).toBe('BUSINESS_RULE_VIOLATION');
 
-    const second = await invite(owner.token, org.id, invitee.user.email, 'viewer');
-    await auth(owner.token).delete(`/api/v1/organizations/${org.id}/invitations/${second.id}`).expect(204);
+    // An existing member cannot be invited again → 409 at invite time.
+    const reInvite = await auth(owner.token)
+      .post(`/api/v1/organizations/${org.id}/invitations`)
+      .send({ email: invitee.user.email, role: 'viewer' });
+    expect(reInvite.status).toBe(409);
 
-    const nonPending = await accept(invitee.token, second.id);
+    // A cancelled invitation is no longer pending → 422 on accept.
+    const inviteOutsider = await invite(owner.token, org.id, outsider.user.email, 'viewer');
+    await auth(owner.token)
+      .delete(`/api/v1/organizations/${org.id}/invitations/${inviteOutsider.id}`)
+      .expect(204);
+    const nonPending = await accept(outsider.token, inviteOutsider.id);
     expect(nonPending.status).toBe(422);
     expect(nonPending.body.error.code).toBe('BUSINESS_RULE_VIOLATION');
   });

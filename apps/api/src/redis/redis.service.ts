@@ -57,6 +57,14 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async ping(): Promise<void> {
+    if (this.client.status === 'wait') {
+      // `lazyConnect` defers the socket; a command issued while `wait` is
+      // rejected synchronously ("Stream isn't writeable and enableOfflineQueue
+      // options is false"), so the connection is established before probing.
+      // This gates the readiness check (phase 2 D9) and the e2e suites' DB
+      // reachability probe (phases 3–14).
+      await withTimeout(this.client.connect(), PING_TIMEOUT_MS);
+    }
     await withTimeout(this.client.ping(), PING_TIMEOUT_MS);
   }
 

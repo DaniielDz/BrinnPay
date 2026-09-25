@@ -58,6 +58,12 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
       await prisma.organization.deleteMany();
       await prisma.refreshSession.deleteMany();
       await prisma.user.deleteMany();
+      // Reset the auth rate-limit counters so repeated local runs (and the
+      // 900s window) stay deterministic (phase 3 D7).
+      const rateLimitKeys = await redis.connection.keys('auth:rl:*');
+      if (rateLimitKeys.length > 0) {
+        await redis.connection.del(rateLimitKeys);
+      }
     }
   });
 
@@ -76,7 +82,8 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
     };
   };
 
-  const auth = (token: string) => request(server()).set('Authorization', `Bearer ${token}`);
+  const auth = (token: string) =>
+    request.agent(server()).use((req: request.Request) => req.set('Authorization', `Bearer ${token}`));
 
   const createOrg = async (token: string, name: string) => {
     const response = await auth(token).post('/api/v1/organizations').send({ name });
@@ -95,11 +102,14 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   const accept = (token: string, invitationId: string) => auth(token).post(`/api/v1/invitations/${invitationId}/accept`);
 
   /** Builds an org owned by `owner` with admin/member/viewer members. */
+  let teamSeq = 0;
   const buildTeam = async () => {
-    const owner = await register('team-owner');
-    const admin = await register('team-admin');
-    const member = await register('team-member');
-    const viewer = await register('team-viewer');
+    teamSeq += 1;
+    const seq = teamSeq.toString(36);
+    const owner = await register(`team-owner-${seq}`);
+    const admin = await register(`team-admin-${seq}`);
+    const member = await register(`team-member-${seq}`);
+    const viewer = await register(`team-viewer-${seq}`);
     const org = await createOrg(owner.token, 'Project Team Org');
 
     await invite(owner.token, org.id, admin.user.email, 'admin');
