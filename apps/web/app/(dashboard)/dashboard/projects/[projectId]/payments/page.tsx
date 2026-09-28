@@ -360,6 +360,9 @@ export default function ProjectPaymentsPage() {
             <dt>Updated</dt>
             <dd>{selected.updated_at}</dd>
           </dl>
+          <Link href={`/dashboard/projects/${projectId}/refunds?environment=${selectedEnvironment}&payment_id=${selected.id}`}>
+            View refunds
+          </Link>
         </section>
       ) : null}
     </section>

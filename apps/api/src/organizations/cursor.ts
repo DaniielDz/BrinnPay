@@ -1,8 +1,13 @@
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export const DEFAULT_LIST_LIMIT = 20;
 export const MAX_LIST_LIMIT = 100;
+
+/** Cursors are entity IDs (UUIDv7, ADR-0001), so the shape is checked at the
+ *  boundary: an arbitrary string would reach the `uuid` comparison of the
+ *  database and surface as an unhandled 500 instead of a field error. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Cursor pagination (phase 1 §7.5, phase 4 §4.5). The cursor is the last
@@ -50,5 +55,6 @@ export class ListQueryDto {
   @IsOptional()
   @IsString()
   @MaxLength(64)
+  @Matches(UUID_PATTERN)
   cursor?: string;
 }

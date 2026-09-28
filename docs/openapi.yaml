@@ -1221,8 +1221,9 @@ paths:
       operationId: refunds.list
       summary: List refunds of a payment
       description: |
-        Lists the refunds issued against a payment with cursor pagination.
-        Refund rules are refined in Phase 9.
+        Lists only this payment's refunds with cursor pagination. The parent
+        payment's project and environment determine access. Session users in
+        any organization role may read; API keys are project/environment scoped.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1255,10 +1256,15 @@ paths:
       operationId: refunds.create
       summary: Create a refund
       description: |
-        Creates a full or partial refund against a payment. This is a critical
-        mutation: it accepts the `Idempotency-Key` header with operation scope
-        `refunds.create` (ADR-0004). Partial refunds require an amount; omitting
-        the amount issues a full refund.
+        Creates a succeeded refund synchronously against a succeeded payment,
+        without changing the payment's status. Omitting `amount` refunds the
+        full remaining balance after earlier refunds; an explicit positive
+        amount may not exceed that balance. Exhausted or ineligible payments
+        return 422. Only owner/admin sessions may create refunds; API keys are
+        project/environment scoped. Optional `Idempotency-Key` uses operation
+        scope `refunds.create` (ADR-0004): a successful retry within 24 hours
+        replays the original 201 response without creating another refund. A
+        key reused for another payment returns 409 without revealing its refund.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1285,6 +1291,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/BusinessRuleViolation"
         "429":
@@ -1295,7 +1303,7 @@ paths:
       tags: [refunds]
       operationId: refunds.retrieve
       summary: Retrieve a refund
-      description: Returns a refund of a payment.
+      description: Returns a refund belonging to the specified payment, within the caller's authorized project and environment.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -2591,6 +2599,7 @@ components:
         - amount
         - currency
         - status
+        - reason
         - created_at
         - updated_at
       properties:
@@ -2613,10 +2622,11 @@ components:
         status:
           type: string
           enum: [pending, processing, succeeded, failed]
-          description: Refund lifecycle status; refined in Phase 9.
+          description: Phase 9 creates succeeded refunds synchronously; other enumerated values are reserved and are not emitted by Phase 9.
         reason:
           type: [string, "null"]
-          description: Optional developer-provided refund reason.
+          maxLength: 255
+          description: Trimmed developer-provided reason; null when omitted.
         created_at:
           type: string
           format: date-time
@@ -2627,8 +2637,9 @@ components:
     RefundCreate:
       type: object
       description: |
-        Full or partial refund. Omitting `amount` issues a full refund; partial
-        refunds require an amount. Validation rules are refined in Phase 9.
+        Omitting `amount` refunds the full remaining balance, including after
+        partial refunds. An explicit positive amount may not exceed the
+        remaining balance. Refunds succeed synchronously.
       properties:
         amount:
           $ref: "#/components/schemas/MoneyAmount"
@@ -2638,6 +2649,7 @@ components:
           description: Defaults to `usd` when omitted (USD-only MVP, ADR-0003).
         reason:
           type: string
+          description: Optional reason; trimmed before validation, must be nonempty and at most 255 characters after trimming. Omit rather than pass null.
 
     WebhookEndpoint:
       type: object

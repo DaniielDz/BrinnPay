@@ -160,10 +160,30 @@ model Payment {
 
   project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  refunds  Refund[]
 
   @@index([projectId, environment])
   @@index([customerId])
   @@map("payments")
+}
+
+// Phase 9: every refund is a synchronous, succeeded operation against one
+// payment. The parent determines project, environment and currency; serialize
+// balance checks on the payment row in the creation transaction.
+model Refund {
+  id          String   @id @db.Uuid
+  paymentId   String   @map("payment_id") @db.Uuid
+  amountMinor BigInt   @map("amount_minor") @db.BigInt
+  currency    String   @db.VarChar(3)
+  status      String   @db.VarChar(20)
+  reason      String?  @db.VarChar(255)
+  createdAt   DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId, id])
+  @@map("refunds")
 }
 
 // Idempotency records (phase 8 §5). Internal infrastructure — no public API
