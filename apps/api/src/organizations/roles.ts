@@ -33,6 +33,8 @@ export const CAPABILITIES = {
   CUSTOMERS_DELETE: 'customers.delete',
   PAYMENTS_READ: 'payments.read',
   PAYMENTS_CREATE: 'payments.create',
+  REFUNDS_READ: 'refunds.read',
+  REFUNDS_CREATE: 'refunds.create',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -75,6 +77,8 @@ const MATRIX: Record<Capability, readonly Role[]> = {
   // (owner + admin), following the Phase 5/6 project-resources pattern.
   [CAPABILITIES.PAYMENTS_READ]: ['owner', 'admin', 'member', 'viewer'],
   [CAPABILITIES.PAYMENTS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.REFUNDS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.REFUNDS_CREATE]: ['owner', 'admin'],
 };
 
 export function isRole(value: string): value is Role {

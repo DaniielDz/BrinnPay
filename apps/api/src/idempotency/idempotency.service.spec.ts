@@ -474,4 +474,133 @@ describe('IdempotencyService (phase 8 §4.2/§4.4, D2/D3/D4/D5)', () => {
       expect(run).not.toHaveBeenCalled();
     });
   });
+
+  // Added by phase 9: a refund balance check must serialize even when the
+  // client omits a key, and a replayed key must be rejected when it targets a
+  // different payment instead of returning another payment's refund.
+  describe('transactionalWithoutKey (phase 9 §4.4.3 — unkeyed refunds serialize)', () => {
+    it('runs the unkeyed mutation inside one transaction and still runs after-commit effects', async () => {
+      const { service, prisma, tx } = setup();
+      const afterCommit = jest.fn();
+      const run = mutation({ ...SUCCESS, afterCommit });
+
+      const result = await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: undefined },
+        run,
+        { transactionalWithoutKey: true },
+      );
+
+      expect(result).toEqual({ status: 201, body: SUCCESS.body, replayed: false });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledWith(tx);
+      expect(afterCommit).toHaveBeenCalledTimes(1);
+      // No key means nothing to claim or store.
+      expect(tx.idempotencyRecord.createMany).not.toHaveBeenCalled();
+    });
+
+    it('rolls the unkeyed mutation back when it throws, and skips after-commit effects', async () => {
+      const { service, prisma, rows } = setup();
+      const afterCommit = jest.fn();
+      const run = jest.fn(async () => {
+        throw new Error('refund rejected');
+      });
+
+      await expect(
+        service.execute(
+          { projectId: PROJECT_ID, operationScope: 'refunds.create', key: undefined },
+          run,
+          { transactionalWithoutKey: true },
+        ),
+      ).rejects.toThrow('refund rejected');
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(afterCommit).not.toHaveBeenCalled();
+      expect(rows).toHaveLength(0);
+    });
+
+    it('still stores a keyed claim and replays it (the option only affects the no-key path)', async () => {
+      const { service, rows } = setup();
+      const run = mutation();
+
+      await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: 'refund-key' },
+        run,
+        { transactionalWithoutKey: true },
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].responseStatus).toBe(201);
+    });
+  });
+
+  describe('validateReplay (phase 9 §4.2.4 — a key is bound to its refund target)', () => {
+    const STORED = { id: 'refund-1', payment_id: 'pay-1', project_id: PROJECT_ID, environment: 'test' };
+    const refundMutation = () => jest.fn(async () => ({ status: 201, body: STORED }));
+
+    it('accepts a replay whose stored body targets the same payment', async () => {
+      const { service } = setup();
+      const validateReplay = jest.fn();
+      const run = refundMutation();
+
+      await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: 'refund-key' },
+        run,
+        { validateReplay },
+      );
+      const replay = await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: 'refund-key' },
+        run,
+        { validateReplay },
+      );
+
+      expect(replay).toEqual({ status: 201, body: STORED, replayed: true });
+      expect(validateReplay).toHaveBeenCalledTimes(1);
+      expect(validateReplay).toHaveBeenCalledWith(STORED);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates the 409 the validator raises for another target without running the mutation', async () => {
+      const { service } = setup();
+      const run = refundMutation();
+      const boundToPay1 = (body: typeof STORED): void => {
+        if (body.payment_id !== 'pay-1') throw new Error('key bound to another target');
+      };
+      const boundToPay2 = (body: typeof STORED): void => {
+        if (body.payment_id !== 'pay-2') throw new Error('key bound to another target');
+      };
+
+      await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: 'refund-key' },
+        run,
+        { validateReplay: boundToPay1 },
+      );
+
+      await expect(
+        service.execute(
+          { projectId: PROJECT_ID, operationScope: 'refunds.create', key: 'refund-key' },
+          run,
+          { validateReplay: boundToPay2 },
+        ),
+      ).rejects.toThrow('key bound to another target');
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('never calls the validator on a first use or on the unkeyed path', async () => {
+      const { service } = setup();
+      const validateReplay = jest.fn();
+
+      await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: 'first' },
+        mutation(),
+        { validateReplay },
+      );
+      await service.execute(
+        { projectId: PROJECT_ID, operationScope: 'refunds.create', key: undefined },
+        mutation(),
+        { transactionalWithoutKey: true, validateReplay },
+      );
+
+      expect(validateReplay).not.toHaveBeenCalled();
+    });
+  });
 });

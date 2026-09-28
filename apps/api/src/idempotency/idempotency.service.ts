@@ -141,13 +141,17 @@ export class IdempotencyService {
   async execute<T>(
     request: IdempotencyRequest,
     run: (tx: IdempotencyTransaction) => Promise<IdempotentExecution<T>>,
+    options: { transactionalWithoutKey?: boolean; validateReplay?: (body: T) => void } = {},
   ): Promise<IdempotentResult<T>> {
     // Validation happens before anything else: a rejected key never claims a
     // slot and never reaches the mutation (§4.2.6).
     const key = normalizeIdempotencyKey(request.key);
 
     if (key === undefined) {
-      const execution = await run(this.prisma);
+      // Refund balance checks must serialize even when the client omits a key.
+      const execution = options.transactionalWithoutKey
+        ? await this.prisma.$transaction((tx) => run(tx), TRANSACTION_OPTIONS)
+        : await run(this.prisma);
       this.afterCommit(execution);
       return { status: execution.status, body: execution.body, replayed: false };
     }
@@ -165,7 +169,9 @@ export class IdempotencyService {
         const claim = await this.claim(tx, target);
 
         if (!claim.acquired) {
-          return this.replay<T>(claim.record);
+          const replayed = this.replay<T>(claim.record);
+          options.validateReplay?.(replayed.body);
+          return replayed;
         }
 
         const execution = await run(tx);

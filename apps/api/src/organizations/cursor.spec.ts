@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 
-import { buildCursorPage, cursorToWhere } from './cursor';
+import { validate } from 'class-validator';
+
+import { buildCursorPage, cursorToWhere, ListQueryDto } from './cursor';
 
 interface Row {
   id: string;
@@ -40,5 +42,17 @@ describe('cursor pagination helper (phase 4 §4.5)', () => {
     expect(cursorToWhere('0192f2a0-0000-7000-8000-000000000001')).toEqual({
       id: { gt: '0192f2a0-0000-7000-8000-000000000001' },
     });
+  });
+
+  it('rejects a malformed cursor as a field error instead of a database cast failure', async () => {
+    const dto = new ListQueryDto();
+    dto.cursor = 'not-a-uuid';
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].property).toBe('cursor');
+
+    const valid = new ListQueryDto();
+    valid.cursor = '0192f2a0-0000-7000-8000-000000000001';
+    expect(await validate(valid)).toHaveLength(0);
   });
 });

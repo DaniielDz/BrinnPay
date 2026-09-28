@@ -16,6 +16,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { RedisModule } from './redis/redis.module';
+import { RefundsModule } from './refunds/refunds.module';
 
 /**
  * Root application module (Phase 8). Wires the base cross-cutting
@@ -49,6 +50,7 @@ import { RedisModule } from './redis/redis.module';
     ApiKeysModule,
     CustomersModule,
     PaymentsModule,
+    RefundsModule,
   ],
   providers: [
     {

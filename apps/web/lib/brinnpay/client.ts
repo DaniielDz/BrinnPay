@@ -631,3 +631,52 @@ export function retrievePayment(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 }
+
+// Refunds are always addressed through their parent payment (phase 9).
+export interface Refund {
+  id: string;
+  payment_id: string;
+  project_id: string;
+  environment: Environment;
+  amount: string;
+  currency: 'usd';
+  status: 'pending' | 'processing' | 'succeeded' | 'failed';
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listRefunds(
+  accessToken: string,
+  paymentId: string,
+  query: { limit?: number; cursor?: string } = {},
+): Promise<CursorPage<Refund>> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  return apiFetch<CursorPage<Refund>>(`/payments/${paymentId}/refunds${params.size ? `?${params}` : ''}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function createRefund(
+  accessToken: string,
+  paymentId: string,
+  input: { amount?: string; currency?: 'usd'; reason?: string },
+): Promise<Refund> {
+  return apiFetch<Refund>(`/payments/${paymentId}/refunds`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function retrieveRefund(
+  accessToken: string,
+  paymentId: string,
+  refundId: string,
+): Promise<Refund> {
+  return apiFetch<Refund>(`/payments/${paymentId}/refunds/${refundId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
