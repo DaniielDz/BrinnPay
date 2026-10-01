@@ -14,3 +14,6 @@ allowBuilds:
   prisma: true
   argon2: true
   "@scarf/scarf": false
+  # msgpackr-extract is BullMQ's optional native msgpack accelerator; BullMQ
+  # falls back to the pure-JS implementation, so no build is required.
+  msgpackr-extract: false

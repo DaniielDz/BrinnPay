@@ -680,3 +680,187 @@ export function retrieveRefund(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Webhooks (phase 10 §4.4/§7)
+// ---------------------------------------------------------------------------
+
+/** The closed webhook event catalog (D1). The API rejects anything else. */
+export const WEBHOOK_EVENT_TYPES = [
+  'payment.created',
+  'payment.succeeded',
+  'payment.failed',
+  'refund.created',
+] as const;
+
+export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+
+/** `WebhookDeliveryStatus` (phase 10 §5.1/D4). */
+export type WebhookDeliveryStatus = 'pending' | 'delivered' | 'failed';
+
+export interface WebhookEndpoint {
+  id: string;
+  project_id: string;
+  environment: Environment;
+  url: string;
+  event_types: WebhookEventType[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The create response is the only place the signing secret ever appears (D8). */
+export interface WebhookEndpointCreated extends WebhookEndpoint {
+  signing_secret: string;
+}
+
+export interface CreateWebhookEndpointInput {
+  environment: Environment;
+  url: string;
+  event_types: WebhookEventType[];
+  enabled?: boolean;
+}
+
+export interface UpdateWebhookEndpointInput {
+  url?: string;
+  event_types?: WebhookEventType[];
+  enabled?: boolean;
+}
+
+/** The stored outbound envelope, exactly as delivered (phase 1 §9.5). */
+export interface WebhookEvent {
+  id: string;
+  project_id: string;
+  environment: Environment;
+  type: WebhookEventType;
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  endpoint_id: string;
+  event_id: string;
+  status: WebhookDeliveryStatus;
+  attempts: number;
+  response_status: number | null;
+  last_error: string | null;
+  next_attempt_at: string | null;
+  is_replay: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListWebhookEndpointsQuery {
+  environment?: Environment;
+  limit?: number;
+  cursor?: string;
+}
+
+/** `type` is the D15 event-type filter; the API answers 400 for a value
+ *  outside the catalog rather than matching nothing. */
+export interface ListWebhookEventsQuery {
+  environment?: Environment;
+  type?: WebhookEventType;
+  limit?: number;
+  cursor?: string;
+}
+
+/** `status` is the D15 delivery-status filter. */
+export interface ListWebhookDeliveriesQuery {
+  status?: WebhookDeliveryStatus;
+  limit?: number;
+  cursor?: string;
+}
+
+/** Serializes an optional filter set, skipping absent and empty values. */
+function listQuery(query: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  }
+  return params.size > 0 ? `?${params}` : '';
+}
+
+export function listWebhookEndpoints(
+  accessToken: string,
+  projectId: string,
+  query: ListWebhookEndpointsQuery = {},
+): Promise<CursorPage<WebhookEndpoint>> {
+  return apiFetch<CursorPage<WebhookEndpoint>>(
+    `/projects/${projectId}/webhook-endpoints${listQuery({ ...query })}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
+
+export function createWebhookEndpoint(
+  accessToken: string,
+  projectId: string,
+  input: CreateWebhookEndpointInput,
+): Promise<WebhookEndpointCreated> {
+  return apiFetch<WebhookEndpointCreated>(`/projects/${projectId}/webhook-endpoints`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateWebhookEndpoint(
+  accessToken: string,
+  projectId: string,
+  endpointId: string,
+  input: UpdateWebhookEndpointInput,
+): Promise<WebhookEndpoint> {
+  return apiFetch<WebhookEndpoint>(`/projects/${projectId}/webhook-endpoints/${endpointId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteWebhookEndpoint(
+  accessToken: string,
+  projectId: string,
+  endpointId: string,
+): Promise<void> {
+  return apiFetch<void>(`/projects/${projectId}/webhook-endpoints/${endpointId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export function listWebhookEvents(
+  accessToken: string,
+  projectId: string,
+  query: ListWebhookEventsQuery = {},
+): Promise<CursorPage<WebhookEvent>> {
+  return apiFetch<CursorPage<WebhookEvent>>(
+    `/projects/${projectId}/webhook-events${listQuery({ ...query })}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
+
+export function listWebhookDeliveries(
+  accessToken: string,
+  projectId: string,
+  endpointId: string,
+  query: ListWebhookDeliveriesQuery = {},
+): Promise<CursorPage<WebhookDelivery>> {
+  return apiFetch<CursorPage<WebhookDelivery>>(
+    `/projects/${projectId}/webhook-endpoints/${endpointId}/deliveries${listQuery({ ...query })}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
+
+/** Replay answers 202 with no body; it is repeatable by design (D12). */
+export function replayWebhookEvent(
+  accessToken: string,
+  projectId: string,
+  endpointId: string,
+  eventId: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/projects/${projectId}/webhook-endpoints/${endpointId}/events/${eventId}/replay`,
+    { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}

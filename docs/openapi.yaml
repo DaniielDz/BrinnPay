@@ -1336,7 +1336,15 @@ paths:
       summary: List webhook endpoints of a project
       description: |
         Lists the registered webhook endpoints of a project environment with
-        cursor pagination. Delivery behavior is refined in Phase 10.
+        cursor pagination. `signing_secret` is never included. Creating or
+        enabling an endpoint also delivers the events it missed while it was
+        disabled, because the reconciliation pass recomputes the fan-out of
+        retained events within a bounded window: the pass scans events from
+        `now - WEBHOOK_RECONCILIATION_HORIZON_MS` (1 hour by default) up to
+        30 seconds old, and the horizon is rejected at boot if it is not longer
+        than that minimum age. Events older than the horizon stay listable and
+        replayable through the replay operation, but the safety net does not
+        backfill them on its own.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1373,6 +1381,22 @@ paths:
         Registers a destination URL with an event subscription for a project
         environment. The signing secret is returned only once, at creation; it is
         used to verify HMAC-SHA256 signatures of outbound deliveries.
+
+        `event_types` is validated against the closed catalog
+        (`payment.created`, `payment.succeeded`, `payment.failed`,
+        `refund.created`); it must be a non-empty subset of it, and an unknown
+        type is a 400 `VALIDATION_ERROR`, as is a missing or empty `event_types`.
+        `url` must be an absolute `http`/`https` URL that satisfies the
+        destination policy; malformed and non-HTTP URLs are a 400
+        `VALIDATION_ERROR`. With API-key authentication the body's `environment`
+        must match the key's environment; an explicit conflict is a 422
+        `BUSINESS_RULE_VIOLATION` (an endpoint of the key's project in the other
+        environment, addressed by id, is instead a 404 that discloses nothing).
+        Duplicate URLs are allowed: there is no uniqueness constraint on
+        `(project, environment, url)`.
+
+        The returned `signing_secret` is unrecoverable afterwards (no rotation
+        operation in this version); recovery is delete and recreate.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1439,7 +1463,18 @@ paths:
       summary: Update a webhook endpoint
       description: |
         Updates the URL, event subscription, or enabled state of a webhook
-        endpoint.
+        endpoint. Omitted fields are unchanged; an empty body is a 400. The
+        signing secret is never rotated or returned.
+
+        Setting `enabled` to `false` stops **new** deliveries from being created;
+        deliveries already queued for the endpoint still run (D11). A disabled
+        endpoint also no longer accepts a replay (422).
+
+        The same validation rules as `webhooks.createEndpoint` apply to `url` and
+        `event_types`, and they are reported the same way: a 400
+        `VALIDATION_ERROR`. The update body carries no `environment` — it is
+        derived from the addressed endpoint and cannot change — so the declared
+        422 is reserved and is not produced in this version.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1475,8 +1510,14 @@ paths:
       operationId: webhooks.deleteEndpoint
       summary: Delete a webhook endpoint
       description: |
-        Deletes a webhook endpoint and stops deliveries to it. Requires an
-        administrative role.
+        Deletes a webhook endpoint, stopping deliveries to it. Its delivery rows
+        are removed with it; a delivery job still queued for a deleted endpoint
+        is a silent no-op. Requires an administrative role (owner or admin) with
+        a session, or an API key scoped to the endpoint's project and
+        environment.
+
+        The `422` response below is reserved for contract symmetry and is not
+        produced in this version: deletion has no business-rule precondition.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1506,8 +1547,31 @@ paths:
       operationId: webhooks.listDeliveries
       summary: List deliveries of a webhook endpoint
       description: |
-        Lists the delivery attempts of events to a webhook endpoint with cursor
-        pagination. Retry and replay semantics are refined in Phase 10.
+        Lists the deliveries of events to a webhook endpoint with cursor
+        pagination. One row is one `(event, endpoint)` aggregate with an
+        `attempts` counter and the last attempt's outcome, not one row per
+        attempt (D4). Delivery is at-least-once and unordered: a destination that
+        times out after processing receives the same envelope again and must
+        deduplicate by envelope `id` (which equals `BrinnPay-Event-Id`).
+
+        Each attempt is an HTTP `POST` of the stored envelope with the headers
+        `BrinnPay-Signature`, `BrinnPay-Event-Id`, `BrinnPay-Event-Type`,
+        `BrinnPay-Delivery-Id`, `BrinnPay-Attempt`, and
+        `User-Agent: BrinnPay-Webhooks/1.0`. The signature value is
+        `t=<unix-seconds>,v1=<lowercase-hex HMAC-SHA256>` and the signed message is
+        `${t}.${rawBody}`, where `t` is generated per attempt and `rawBody` is the
+        exact bytes transmitted, so a destination must verify against the raw
+        body rather than a re-serialization of the parsed JSON (D7).
+
+        A retryable failure is retried up to five attempts total with exponential
+        backoff and full jitter (approximately 0 s, 30 s, 2 min, 10 min, 1 h,
+        capped). A parseable `Retry-After` header is honored, clamped to the same
+        cap; seconds and HTTP-date are accepted, anything else is ignored. Network
+        errors and timeouts, and the statuses 408, 425, 429 and 5xx, are
+        retryable; any other 4xx and every 3xx are terminal `failed` and are never
+        retried. Redirects are never followed and response bodies are never read
+        or stored, so `last_error` carries only a bounded, sanitized summary
+        (D5/D6).
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1516,6 +1580,7 @@ paths:
         - $ref: "#/components/parameters/EndpointId"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/DeliveryStatus"
       responses:
         "200":
           description: Paginated delivery list.
@@ -1543,8 +1608,20 @@ paths:
       operationId: webhooks.replayEvent
       summary: Replay a webhook event to an endpoint
       description: |
-        Re-creates a delivery of a previously emitted event to a webhook
-        endpoint. Requires an administrative role.
+        Re-creates a delivery of a retained event to a webhook endpoint as a new
+        delivery with the original envelope; the event is not modified and the
+        attempt is repeated for the same `(event, endpoint)` pair, so replaying
+        twice produces two deliveries (`is_replay` is `true`).
+
+        The event must belong to the same project **and** environment as the
+        endpoint; a foreign, cross-environment, or retention-expired event is a
+        404 and reveals nothing about either resource. An endpoint that is
+        disabled or not subscribed to the event's type is a 422.
+
+        Replay is intentionally repeatable: the partial unique index that
+        guarantees at most one fan-out delivery per `(event, endpoint)` excludes
+        replays. Requires an administrative role (owner or admin) with a session,
+        or an API key scoped to the endpoint's project and environment.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1576,7 +1653,10 @@ paths:
       summary: List webhook events of a project
       description: |
         Lists the outbound events emitted in a project environment with cursor
-        pagination. Event payloads follow the outbound envelope (phase 1 §9.5).
+        pagination. Each row is the stored outbound envelope
+        (`id`, `type`, `environment`, `project_id`, `data`, `created_at`). Events
+        are retained for a configurable window (default 30 days); an expired
+        event is removed by the cleanup pass, absent here, and 404 on replay.
       security:
         - ApiKeyAuth: []
         - SessionAuth: []
@@ -1585,6 +1665,7 @@ paths:
         - $ref: "#/components/parameters/Environment"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/EventType"
       responses:
         "200":
           description: Paginated webhook event list.
@@ -1866,6 +1947,35 @@ components:
         authentication the environment is derived from the key and must match.
       schema:
         $ref: "#/components/schemas/Environment"
+    EventType:
+      name: type
+      in: query
+      required: false
+      description: |
+        Optional event-type filter for `webhooks.listEvents` (D15). Must be a
+        member of the closed webhook catalog; an unknown type is a 400.
+      schema:
+        type: string
+        enum:
+          [
+            payment.created,
+            payment.succeeded,
+            payment.failed,
+            refund.created,
+          ]
+        example: payment.succeeded
+    DeliveryStatus:
+      name: status
+      in: query
+      required: false
+      description: |
+        Optional status filter for `webhooks.listDeliveries` (D15): only
+        `pending` (queued or retrying), `delivered`, or `failed` (attempts
+        exhausted or a non-retryable outcome). A value outside the enum is a 400
+        `VALIDATION_ERROR`, not an empty page.
+      schema:
+        type: string
+        enum: [pending, delivered, failed]
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -2682,12 +2792,13 @@ components:
         event_types:
           type: array
           items:
-            type: string
-          description: |
-            Subscribed event types using the `<resource>.<past-tense-verb>`
-            convention, e.g. `payment.succeeded` (phase 1 §9.4).
+            $ref: "#/components/schemas/WebhookEventType"
+          description: Subscribed event types from the closed webhook catalog.
         enabled:
           type: boolean
+          description: |
+            When `false`, no new delivery is created for this endpoint. A
+            delivery already queued still runs (D11).
         created_at:
           type: string
           format: date-time
@@ -2728,12 +2839,17 @@ components:
         event_types:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/WebhookEventType"
         enabled:
           type: boolean
         signing_secret:
           type: string
-          description: Endpoint signing secret, returned only at creation.
+          description: |
+            Endpoint signing secret, returned only at creation. It is stored
+            encrypted (AES-256-GCM) and is **not** recoverable through the API:
+            there is no rotation or reveal operation, so it must be copied at
+            creation time. Deleting and recreating the endpoint is the only way
+            to obtain a new secret (D8).
         created_at:
           type: string
           format: date-time
@@ -2741,9 +2857,26 @@ components:
           type: string
           format: date-time
 
+    WebhookEventType:
+      type: string
+      description: |
+        A member of the closed webhook event catalog. The catalog is owned by
+        the emitting domain modules: an unknown type is rejected with a 400
+        `VALIDATION_ERROR` rather than stored, because a stored type that is
+        never emitted would create an endpoint that can never fire (D1).
+      enum:
+        [
+          payment.created,
+          payment.succeeded,
+          payment.failed,
+          refund.created,
+        ]
+      example: payment.succeeded
+
     WebhookEndpointCreate:
       type: object
       required: [environment, url, event_types]
+      additionalProperties: false
       properties:
         environment:
           $ref: "#/components/schemas/Environment"
@@ -2753,33 +2886,51 @@ components:
         url:
           type: string
           format: uri
+          maxLength: 2048
+          description: |
+            Absolute destination URL. Only `http` and `https` are accepted, and
+            the URL must satisfy the server's destination policy. Redirects are
+            never followed, so the destination must answer directly.
         event_types:
           type: array
+          minItems: 1
+          uniqueItems: true
           items:
-            type: string
+            $ref: "#/components/schemas/WebhookEventType"
         enabled:
           type: boolean
           default: true
 
     WebhookEndpointUpdate:
       type: object
+      additionalProperties: false
+      description: |
+        At least one field is required; an empty patch is a 400. Omitted fields
+        are left unchanged.
+      minProperties: 1
       properties:
         url:
           type: string
           format: uri
+          maxLength: 2048
         event_types:
           type: array
+          minItems: 1
+          uniqueItems: true
           items:
-            type: string
+            $ref: "#/components/schemas/WebhookEventType"
         enabled:
           type: boolean
 
     WebhookEvent:
       type: object
       required: [id, project_id, environment, type, data, created_at]
+      additionalProperties: false
       description: |
-        An outbound domain event instance. The payload follows the outbound
-        envelope (phase 1 §9.5).
+        An outbound domain event instance, exactly as delivered: the stored
+        envelope is the transmitted body, and replay re-delivers it unchanged
+        (phase 1 §9.5). `id` is the event's UUIDv7 and is the destination's
+        deduplication key.
       properties:
         id:
           type: string
@@ -2790,13 +2941,11 @@ components:
         environment:
           $ref: "#/components/schemas/Environment"
         type:
-          type: string
-          description: Event type following `<resource>.<past-tense-verb>`.
-          example: payment.succeeded
+          $ref: "#/components/schemas/WebhookEventType"
         data:
           type: object
           additionalProperties: true
-          description: Event payload.
+          description: Event payload, the emitted resource snapshot.
         created_at:
           type: string
           format: date-time
@@ -2804,12 +2953,33 @@ components:
     WebhookDelivery:
       type: object
       required:
-        [id, endpoint_id, event_id, status, attempts, created_at, updated_at]
-      description: One delivery attempt of a webhook event to a webhook endpoint (phase 1 §6.2).
+        [
+          id,
+          endpoint_id,
+          event_id,
+          status,
+          attempts,
+          response_status,
+          last_error,
+          next_attempt_at,
+          is_replay,
+          created_at,
+          updated_at,
+        ]
+      description: |
+        The `(event, endpoint)` delivery aggregate (D4): one row per pair with an
+        `attempts` counter and the outcome of the last attempt, not a row per
+        attempt. `status` is `pending` while attempts remain (queued, in flight,
+        or waiting for a scheduled retry), `delivered` after a 2xx, and `failed`
+        once the attempt budget is exhausted or the outcome is non-retryable
+        (D5/D6).
       properties:
         id:
           type: string
           format: uuid
+          description: |
+            Delivery UUIDv7, also sent as the `BrinnPay-Delivery-Id` header. It
+            is the destination's key for deduplicating at-least-once retries.
         endpoint_id:
           type: string
           format: uuid
@@ -2819,13 +2989,36 @@ components:
         status:
           type: string
           enum: [pending, delivered, failed]
-          description: Delivery status; retry/backoff semantics are refined in Phase 10.
         attempts:
           type: integer
           minimum: 0
+          description: HTTP attempts made so far; 0 before the first attempt.
         response_status:
           type: [integer, "null"]
-          description: HTTP status returned by the destination on the last attempt, when available.
+          description: |
+            HTTP status returned by the destination on the last attempt, or
+            `null` when the attempt failed before a response (DNS, connect, or
+            timeout).
+        last_error:
+          type: [string, "null"]
+          maxLength: 500
+          description: |
+            Bounded, sanitized summary of the last failure. It never contains a
+            destination response body, credentials, or a signing secret; it is
+            `null` until an attempt fails.
+        next_attempt_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the next retry is scheduled (D5). `null` for a terminal delivery
+            and for a `delivered` one.
+        is_replay:
+          type: boolean
+          description: |
+            `true` when the delivery was created by `webhooks.replayEvent`
+            (D12). Replayed deliveries are exempt from the one-delivery-per-
+            `(event, endpoint)` guarantee, so the same event can be replayed more
+            than once.
         created_at:
           type: string
           format: date-time

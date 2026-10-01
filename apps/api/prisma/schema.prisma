@@ -122,6 +122,8 @@ model Project {
   customers          Customer[]
   payments           Payment[]
   idempotencyRecords IdempotencyRecord[]
+  webhookEndpoints   WebhookEndpoint[]
+  webhookEvents      WebhookEvent[]
 
   @@index([organizationId])
   @@map("projects")
@@ -194,6 +196,97 @@ model Refund {
 // record per (project, operation scope, key) and backs the atomic claim
 // (phase 8 §4.4); `expires_at` (`created_at` + 24h, ADR-0004) drives expiry and
 // the request-path reuse rule plus the bounded-storage cleanup.
+// Phase 10 (ADR-0011): webhooks. Three tables with distinct ownership:
+//
+//   1. `webhook_events` — the immutable, project-scoped event store. One row per
+//      (project, environment) domain event, with a UUIDv7 `id` supplied by the
+//      emitting module (re-persistence is a no-op, phase 10 §4.3.5) and
+//      `payload` holding the canonical phase 1 §9.5 envelope — the same bytes
+//      that are delivered, so a replay is byte-identical. `type` and
+//      `environment` are app-validated. FK to `projects` ON DELETE CASCADE.
+//   2. `webhook_endpoints` — the developer-registered destination. The signing
+//      secret must be recoverable to sign (it cannot be hashed like an API
+//      key), so it is stored encrypted with AES-256-GCM: ciphertext, IV and
+//      auth tag in separate columns (D8). The plaintext is returned exactly
+//      once, at creation, and never again. Duplicate URLs are allowed (D16).
+//   3. `webhook_deliveries` — the per-(event, endpoint) delivery aggregate
+//      (D4): an `attempts` counter plus the last attempt's outcome, not one
+//      row per attempt. `last_error` is a bounded, sanitized summary — never a
+//      response body, never a secret. `request_id` records the API request
+//      that caused the event (phase 1 §7.7). FKs cascade from the endpoint and
+//      the event, so deleting an endpoint removes its delivery records while
+//      the project-scoped events survive (D11).
+//
+// Indexes serve the environment-scoped cursor scans
+// `(project_id, environment, id)`, the per-endpoint delivery scan
+// `(endpoint_id, id)`, the enabled-endpoint subscription match, and the
+// retention cleanup scan.
+
+model WebhookEndpoint {
+  id            String   @id @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  environment   String   @db.VarChar(20)
+  url           String   @db.VarChar(2048)
+  eventTypes    String[] @map("event_types")
+  enabled       Boolean  @default(true)
+  secretCipher  String   @map("secret_ciphertext") @db.VarChar(512)
+  secretIv      String   @map("secret_iv") @db.VarChar(64)
+  secretAuthTag String   @map("secret_auth_tag") @db.VarChar(64)
+  createdAt     DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @map("updated_at") @db.Timestamptz(3)
+
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([projectId, environment, id])
+  @@index([projectId, environment, enabled])
+  @@map("webhook_endpoints")
+}
+
+model WebhookEvent {
+  id          String   @id @db.Uuid
+  projectId   String   @map("project_id") @db.Uuid
+  environment String   @db.VarChar(20)
+  type        String   @db.VarChar(50)
+  payload     Json     @db.JsonB
+  createdAt   DateTime @map("created_at") @db.Timestamptz(3)
+
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([projectId, environment, id])
+  @@index([projectId, environment, type])
+  @@index([createdAt])
+  @@map("webhook_events")
+}
+
+model WebhookDelivery {
+  id             String    @id @db.Uuid
+  endpointId     String    @map("endpoint_id") @db.Uuid
+  eventId        String    @map("event_id") @db.Uuid
+  status         String    @db.VarChar(20)
+  attempts       Int       @default(0)
+  responseStatus Int?      @map("response_status")
+  lastError      String?   @map("last_error") @db.VarChar(500)
+  nextAttemptAt  DateTime? @map("next_attempt_at") @db.Timestamptz(3)
+  requestId      String?   @map("request_id") @db.VarChar(64)
+  isReplay       Boolean   @default(false) @map("is_replay")
+  createdAt      DateTime  @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @map("updated_at") @db.Timestamptz(3)
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  event    WebhookEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, id])
+  // "at most one delivery per (event, endpoint)" (§4.3.6) is enforced by the
+  // partial unique index `webhook_deliveries_event_endpoint_unique` in the
+  // migration (raw SQL — Prisma cannot express a `WHERE is_replay = false`
+  // unique index declaratively, the Phase 4 invitation pattern). Replays are
+  // deliberately excluded so a manual replay can create another delivery.
+  @@index([status, nextAttemptAt])
+  @@map("webhook_deliveries")
+}
+
 model IdempotencyRecord {
   id             String   @id @db.Uuid
   projectId      String   @map("project_id") @db.Uuid

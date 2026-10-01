@@ -6,9 +6,10 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { uuidv7 } from '../src/common/uuid/uuid';
-import { PAYMENT_EVENT_SINK, type PaymentEvent } from '../src/payments/payment-events';
+import type { PaymentEvent } from '../src/payments/payment-events';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../src/webhooks/webhook-events';
 
 /**
  * Phase 8 e2e (§8.1): the `payments.create` idempotency contract against the
@@ -17,11 +18,13 @@ import { RedisService } from '../src/redis/redis.service';
  * reuse (D5), the database-backed concurrency guarantee (D4), the retained 400
  * on an invalid header, and the "rejected requests do not poison the key" rule.
  *
- * The `payment.created` emission is observed through a recording sink
- * substituted for the phase 7 no-op sink, which is what proves that a replay
- * produces no second side effect. CI provides PostgreSQL/Redis as service
- * containers; locally the suite skips when they are unreachable (same pattern
- * as Phases 3–7).
+ * The `payment.created` emission is observed through a recording stand-in for the
+ * webhooks module's `WEBHOOK_EVENT_PORT` (phase 10 D2), which is what proves that
+ * a replay produces no second side effect. Substituting the port also keeps the
+ * suite free of queue traffic: the real port would persist real events and
+ * enqueue real jobs, which is covered by `test/webhooks.e2e-spec.ts`. CI provides
+ * PostgreSQL/Redis as service containers; locally the suite skips when they are
+ * unreachable (same pattern as Phases 3–7).
  */
 const RUN = Date.now().toString(36);
 const EMAIL = (slug: string) => `e2e-idem-${slug}-${RUN}@example.com`;
@@ -56,8 +59,11 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(PAYMENT_EVENT_SINK)
-      .useValue({ emit: (event: PaymentEvent) => void events.push(event) })
+      .overrideProvider(WEBHOOK_EVENT_PORT)
+      .useValue({
+        persist: async (_tx: unknown, event: PaymentEvent) => void events.push(event),
+        dispatch: async () => undefined,
+      } satisfies WebhookEventPort)
       .compile();
     app = moduleRef.createNestApplication();
     configureApp(app, app.get(ConfigService));

@@ -53,6 +53,27 @@ export const REDACT_PATHS: string[] = [
   '*.authorization',
   'card',
   '*.card',
+  'signing_secret',
+  '*.signing_secret',
+  'signingSecret',
+  '*.signingSecret',
+  // The at-rest AES-GCM envelope of a webhook signing secret (phase 10 D8). Not
+  // logged by any code path today, but these are the ciphertext, IV and auth tag
+  // of every endpoint secret, so they belong in the same last-line-of-defence
+  // list as `api_key`. Redaction paths match whole key names, not prefixes, so
+  // `secret`/`*.secret` above do not cover `secret_ciphertext`.
+  'secret_ciphertext',
+  '*.secret_ciphertext',
+  'secretCipher',
+  '*.secretCipher',
+  'secret_iv',
+  '*.secret_iv',
+  'secretIv',
+  '*.secretIv',
+  'secret_auth_tag',
+  '*.secret_auth_tag',
+  'secretAuthTag',
+  '*.secretAuthTag',
   'card_number',
   '*.card_number',
   'cvc',

@@ -35,6 +35,11 @@ export const CAPABILITIES = {
   PAYMENTS_CREATE: 'payments.create',
   REFUNDS_READ: 'refunds.read',
   REFUNDS_CREATE: 'refunds.create',
+  WEBHOOKS_READ: 'webhooks.read',
+  WEBHOOKS_CREATE: 'webhooks.create',
+  WEBHOOKS_UPDATE: 'webhooks.update',
+  WEBHOOKS_DELETE: 'webhooks.delete',
+  WEBHOOKS_REPLAY: 'webhooks.replay',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -79,6 +84,18 @@ const MATRIX: Record<Capability, readonly Role[]> = {
   [CAPABILITIES.PAYMENTS_CREATE]: ['owner', 'admin'],
   [CAPABILITIES.REFUNDS_READ]: ['owner', 'admin', 'member', 'viewer'],
   [CAPABILITIES.REFUNDS_CREATE]: ['owner', 'admin'],
+  // Phase 10 matrix (§4.5, D10): reading endpoints, events, and deliveries is
+  // available to every member role; registering, editing (including the
+  // `enabled` switch), deleting, and replaying are administrative (owner+admin),
+  // following the Phase 5/6/7/9 project-resource pattern. `webhooks.read` covers
+  // all three read surfaces so a member can debug a delivery without write
+  // access, and a project-scoped API key is a full project operator — roles are
+  // not evaluated in API-key mode.
+  [CAPABILITIES.WEBHOOKS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.WEBHOOKS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.WEBHOOKS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.WEBHOOKS_DELETE]: ['owner', 'admin'],
+  [CAPABILITIES.WEBHOOKS_REPLAY]: ['owner', 'admin'],
 };
 
 export function isRole(value: string): value is Role {
