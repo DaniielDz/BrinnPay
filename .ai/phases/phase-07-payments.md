@@ -1,10 +1,30 @@
 # Phase 7 — Payments
 
+> **Implementation status (2026-10-01).** Phase 7 is **implemented and merged**. Sections
+> describing the Phase 7 delivery are retained as the record of what this phase owned. Three
+> things have since been **superseded by later phases** and are annotated inline with a
+> "superseded" note plus a consolidated table in **§16 (Reconciliation with later phases)**:
+>
+> - **D6 / `Idempotency-Key`** — Phase 7 accepted and validated the header but deliberately did
+>   **not** use it for replay. **Phase 8 (Idempotency) replaced this temporary behavior** with the
+>   live replay/dedup semantics (scope `payments.create`). See §4.2 rule 9, §12, D6, §16.1.
+> - **§4.7 event sink (D10)** — Phase 7 emitted through a local event sink. **Phase 10 (Webhooks)
+>   replaced the sink** with a durable `WEBHOOK_EVENT_PORT` and moved event persistence/delivery
+>   there; the payment **event catalog, payload and emission points are unchanged**. See §4.7, §16.1.
+> - **D11 access-guard reuse** — Phase 7 cloned the Phase 6 guard and deferred a shared extraction
+>   "until the third consumer". Phases 9 and 10 each cloned/extracted further; **Phase 10 §14
+>   introduced the shared `ProjectAccessGuard`**. See §4.3, §12, D11, §16.2.
+>
+> No Phase 7 behavior was silently changed by a later phase: each override is explicit and
+> recorded below. The payment **state machine, simulation, money handling, tenant/environment
+> isolation and RBAC matrix remain exactly as specified here** and are consumed as normative by
+> Phases 8, 9 and 10.
+
 |                   |                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------- |
 | Phase             | 7                                                                                            |
 | Name              | Payments                                                                                     |
-| Status            | **Draft — decisions D1–D12 pending product-authority confirmation (2026-09-25)**             |
+| Status            | **Implemented — D1–D5, D7–D12 ratified by implementation; D6 and the event seam superseded by Phases 8/10. Reconciled 2026-10-01 (§16)** |
 | Depends on        | Phase 6 (complete), Phase 5 (complete), Phase 4 (complete), Phase 3 (complete), Phase 2 (complete) |
 | Blocks            | Phase 8 (Idempotency), Phase 9 (Refunds), Phase 10 (Webhooks), Phase 16 (Sandbox)            |
 | Roadmap reference | [ROADMAP.md](../../ROADMAP.md) — Phase 7                                                    |
@@ -217,6 +237,15 @@ Domain rules:
    payments. This semantic gap is explicitly owned by Phase 8 and documented in the
    contract description (in-place refinement).
 
+   > **Superseded by Phase 8 (complete).** The accepted-but-nonfunctional behavior above was a
+   > deliberate Phase 7 placeholder. **Phase 8 §4.3.1** replaced it: `payments.create` now runs
+   > through the shared idempotency capability under operation scope `payments.create`, so a
+   > same-project retry inside the 24-hour retention window (ADR-0004) **replays the stored 201
+   > `Payment`** instead of creating a second payment and emits no second `payment.created`;
+   > an absent key remains a normal non-idempotent create. The contract description now states
+   > the live behavior. **The Phase 7 obligation below is discharged; nothing further is required
+   > here.** See §16.1.
+
 #### `GET /projects/{project_id}/payments/{payment_id}` — `payments.retrieve` (200)
 
 Domain rules:
@@ -324,6 +353,18 @@ pending ──► processing ──► succeeded   (default simulation)
 - `updated_at` advances on each transition. Delays must be configurable/injectable so tests
   run deterministically with near-zero delays or a controlled clock.
 
+> **Reconciled with Phase 10 (complete).** The state machine itself is **unchanged** and remains
+> normative. Two clarifications were added by Phase 10 and are now part of the effective behavior:
+>
+> - **The queue-driven advancement sweep is the primary driver; read-time catch-up is the
+>   backstop.** Phase 10 §5.3/D3 added a periodic sweep that asks the payments module to apply due
+>   edges across all projects/environments, so a `payment.succeeded` event fires **without anybody
+>   reading the payment** (read-driven advancement alone would almost never emit it). The sweep
+>   applies the identical compare-and-set edges, so it adds no lifecycle rule: the sweep and a
+>   concurrent read contend on the same CAS and only the winner emits.
+> - **Delays are env-configurable**: `PAYMENT_PENDING_DELAY_MS` / `PAYMENT_SETTLEMENT_DELAY_MS`
+>   (defaults 1000 / 2000), injected through the `PAYMENT_DELAYS` token.
+
 ### 4.7 Payment event catalog (D10)
 
 Phase 1 §9.1 assigns the payment event catalog to Phase 7. The catalog binds Phase 10
@@ -347,6 +388,18 @@ Phase 1 §9.1 assigns the payment event catalog to Phase 7. The catalog binds Ph
   no-op/debug implementation in Phase 7). The webhooks module (Phase 10) implements event
   persistence and delivery against the same seam. The payments module owns the catalog and
   the emission points only; it must not create the `webhook_events` table in this phase.
+
+  > **Sink replaced by Phase 10 (complete); catalog unchanged.** Phase 7's local sink is gone:
+  > the payments module now emits through the webhooks module's durable inbound port
+  > (`WEBHOOK_EVENT_PORT`), which **persists the event inside the emitting transaction** and
+  > schedules delivery strictly after the commit (ADR-0015). The observable contract is
+  > unchanged and, where Phase 7 was loose, is now **stricter**: an event exists if and only if
+  > its mutation committed, a rolled-back transition emits nothing and retries on the next pass,
+  > and an idempotency replay emits nothing. The **terminal edge and its event commit together**
+  > (the pre-Phase-10 shape could lose the event after the payment was already terminal). The
+  > event id is owned by the emitter, so re-persisting is a no-op. `request_id` is recorded on the
+  > resulting delivery rows — it is **not** part of the phase 1 §9.5 envelope and is never sent
+  > to a destination. See §16.1.
 
 ### 4.8 Money handling (D7, D8)
 
@@ -562,6 +615,12 @@ No `deleted_at` (no deletion surface in the contract), no customer/refund histor
     over-long header → **400**; the header is not used for deduplication in Phase 7
     (same-key duplicate creates are permitted) and the contract description documents this
     Phase 8 handoff.
+
+    > **Met, then superseded (Phase 8).** Header validation holds. The "no deduplication" half
+    > was the Phase 7 placeholder and is **no longer the effective behavior**: Phase 8 §4.3.1
+    > replays the stored 201 `Payment` per `(project, payments.create, key)` within the 24-hour
+    > window, creating no second payment and emitting no second `payment.created`. The contract
+    > description now documents the live behavior, not the Phase 8 handoff.
 11. **Delete-with-payments (D4):** `customers.delete` on a customer with linked payments →
     **422** `BUSINESS_RULE_VIOLATION`; without payments → **204** as before; the
     `payments.customer_id` FK is `ON DELETE RESTRICT` (backstop); the `customers.delete`
@@ -569,6 +628,11 @@ No `deleted_at` (no deletion surface in the contract), no customer/refund histor
 12. **Event catalog (D10):** `payment.created`, `payment.succeeded`, and `payment.failed`
     are emitted at the specified transitions through the event seam with the phase 1 §9.5
     envelope; emission is observable in tests; no `webhook_events` persistence exists yet.
+
+    > **Met, then extended (Phase 10).** The catalog, payloads, triggers and emission points
+    > are unchanged and now backed by durable persistence through the webhooks module's port. The
+    > "no `webhook_events` persistence" clause is Phase 7's scope boundary, not an ongoing
+    > constraint: persistence and delivery belong to Phase 10 §5.
 13. **`payments` table:** exists with the specified columns, FKs (`CASCADE` to projects,
     `RESTRICT` to customers), indexes, and conventions (UUIDv7, BigInt minor units,
     timestamps, snake_case); `prisma migrate deploy` applies the migration in CI and clean
@@ -639,6 +703,27 @@ No `deleted_at` (no deletion surface in the contract), no customer/refund histor
 - Assertions that payment amount/description content never appears in structured request
   logs beyond the contract response surface are included where logging is exercised.
 
+### 9.3 Coverage status (reconciled 2026-10-01)
+
+Verified against the repository after Phases 8, 9 and 10:
+
+| §9.1 requirement                                                       | Where it is covered today                                              | Status |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------ |
+| Money helper, service rules, environment match (D1/D3/D7/D9), state machine, event emission, customers delete-with-payments (D4) | `payments.service.spec.ts`, `payment-simulation.spec.ts`, `customers.service.spec.ts` (incl. the P2003 race backstop), `common/money/money.spec.ts` | Covered |
+| Dual-mode boundary and capability matrix (D5/D11)                       | `payments-access.guard.spec.ts`, `organizations/roles.spec.ts`         | Covered |
+| DTO validation                                                          | DTO/class-validator coverage inside the service and guard specs         | Covered |
+| Web payments page states (§5.1)                                         | `apps/web/test/unit/payments-pages.spec.tsx`                            | Covered |
+| Payment create/list/retrieve end-to-end, per-role RBAC, non-member 404, cross-project/cross-environment IDOR, delete-with-payments 422 over HTTP | **No dedicated payments e2e spec.** Exercised only indirectly: `idempotency.e2e-spec.ts` (create under session + API key, cross-mode replay), `refunds.e2e-spec.ts` (create → advance → succeeded), `webhooks*.e2e-spec.ts` | **Gap** |
+
+- The gap is an **acceptance-criteria debt of this phase**, not a Phase 17 item: §9.1 assigned the
+  HTTP-level payment suite to Phase 7. The unit suites assert the same rules against the service and
+  guard, so this is a coverage/traceability gap, not a known defect.
+- Recommended closure (small, no behavior change): a `apps/api/test/payments.e2e-spec.ts` covering
+  §9.1's HTTP list — session create/list/retrieve, per-role capability checks, non-member 404,
+  API-key scoping incl. cross-project 404 and environment-mismatch 422, malformed `payment_id` 404,
+  the simulation reaching `succeeded` with injected delays, and `customers.delete` → 422 on a
+  customer with payments. Decide the owning phase (§16.3, OQ-2).
+
 ## 10. Definition of Done
 
 Phase 7 is complete when:
@@ -683,6 +768,12 @@ Phase 7 is complete when:
   404/403). Reuse the Phase 5/6 infra (API-key lookup, session guard, capability registry,
   cursor helper, `environment.ts`) rather than duplicating it. A shared extraction of the
   guard is deferred until the third consumer (refunds, Phase 9) exists.
+
+  > **Deferred, then overtaken (Phase 10 §14).** `payments`, `customers` and `refunds` each kept a
+  > clone; the shared `ProjectAccessGuard` + `ProjectScope` now exists and the webhooks module uses
+  > it, while the payments controller still uses `PaymentsAccessGuard`. The clone is behaviorally
+  > equivalent today, but four copies of authorization semantics are a security-relevant drift
+  > risk. Consolidation is a recommendation, not Phase 7 scope — see §16.3 (OQ-1).
 - **Environment resolution (D1):** session + list/create must receive `environment`
   (DTO/query-required → 400 when missing, field error); API-key mode derives it from the
   key and treats an explicit conflicting value as 422 (list and create) — mirror phase 6
@@ -706,6 +797,13 @@ Phase 7 is complete when:
   (interface + no-op/debug implementation); called from the create path (`payment.created`)
   and the terminal transition path (`payment.succeeded`/`payment.failed`). Phase 10 wires
   the real sink. Do not create `webhook_events` tables now.
+
+  > **Delivered as Phase 7 planned, replaced by Phase 10.** The seam contract held (the payments
+  > module owns the catalog and the emission points and never touches `webhook_*` tables), but
+  > Phase 10 §5 implemented the sink as the webhooks module's durable `WEBHOOK_EVENT_PORT`,
+  > persisting each event **inside the payment's own transaction** and dispatching post-commit.
+  > Phase 10 also made the **terminal edge commit together with its event** — Phase 7's original
+  > detached edge could lose `payment.succeeded` after the payment was already terminal.
 - **Customers module change (D4):** in `customers.service.delete`, after the scoped
   customer is found, check `payment.count({ where: { customerId } })` → 422 when > 0; the
   FK `RESTRICT` is the DB backstop. Refine the `customers.delete` contract description in
@@ -717,6 +815,10 @@ Phase 7 is complete when:
   amounts); `Payment.failure_code` description (set when failed; catalog in Phase 16);
   `customers.delete` description (RESTRICT behavior). Add the `payments.list` 422 response
   if D1 confirms it. Keep lint clean.
+
+  > **Done, with one open polish item.** All listed refinements are applied, and Phase 8 replaced
+  > the `payments.create` "Phase 8 handoff" wording with the live replay behavior. Remaining
+  > nit: `payments.retrieve`'s description does not mention lazy advancement (§16.3, OQ-4).
 - **UI (D8 flow-through):** the environment selector (phase 5 §5.3) already persists
   `environment` as a query parameter on child links; the payments page reads it (default
   `test`), passes it to `payments.list`/`payments.create`, and never mixes environments.
@@ -731,10 +833,12 @@ Phase 7 is complete when:
 ## 13. Out of Scope
 
 - Idempotency storage, replay, deduplication, TTL mechanics (Phase 8) — Phase 7 only
-  accepts/validates the `Idempotency-Key` header (D6).
+  accepts/validates the `Idempotency-Key` header (D6). **Delivered by Phase 8; this exclusion is
+  historical.**
 - Refunds — full/partial refund logic, refund rules, refund endpoints (Phase 9).
 - Webhook event persistence, webhook endpoints, HMAC delivery, retries, replay (Phase 10) —
-  Phase 7 defines the payment event catalog and emission seam only.
+  Phase 7 defines the payment event catalog and emission seam only. **Delivered by Phase 10; this
+  exclusion is historical.**
 - Request logs and audit logs (Phases 11/12).
 - All-route rate limiting (Phase 13).
 - Sandbox decline/timeout/failure simulation scenarios and the `failure_code` catalog
@@ -747,24 +851,30 @@ Phase 7 is complete when:
 
 ## 14. Decisions
 
-> **Pending product-authority confirmation (2026-09-25).** The recommendations below ([rec])
-> are the smallest solutions consistent with the canonical contract and prior phases.
-> Phase 7 is not ready for implementation until D1–D12 are confirmed.
+> **Status (2026-10-01): implemented.** D1–D5 and D7–D12 were **ratified by implementation** — the
+> merged Phase 7 build matches each recommendation exactly (verified against the repository), and
+> Phases 8, 9 and 10 cite them as normative. **D6 was implemented as recommended and has since been
+> superseded by Phase 8** (the header now replays rather than merely validating). **D13 is new and
+> requires a decision** (§16.3). The alternatives are retained as the record of what was considered.
+>
+> Original note (2026-09-25): the recommendations below ([rec]) were the smallest solutions
+> consistent with the canonical contract and prior phases.
 
-| # | Decision | Recommended option [rec] / alternatives |
-| - | -------- | ---------------------------------------- |
-| D1 | Environment mismatch on `payments.list` | **[rec]** Mirror phase 6 D2: session list without `environment` → **400**; API-key explicit conflicting value → **422** `BUSINESS_RULE_VIOLATION` on list and create — requiring an in-place 422 response addition to `payments.list` (ADR-0012). Alternatives: use the contract's existing 400 for list mismatches (no contract change, but inconsistent with create's 422 and weaker semantics); a dedicated `ENVIRONMENT_MISMATCH` code (extra registry entry; not needed). |
-| D2 | Simulation mechanics | **[rec]** Default-success simulation: payments advance `pending → processing → succeeded` with short, configurable delays computed deterministically from `created_at`; advancement is guarded and lazy-safe (read-time catch-up), so restarts never strand a payment; **no** public failure trigger in Phase 7 (`failed` is defined and service-testable; decline/timeout/failure scenarios and `failure_code` catalog are Phase 16). Alternatives: advance only on read (no timers — statuses would lie until read; undermines future webhook events); expose a failure trigger now (front-loads Phase 16 and invents sandbox-scenario config the roadmap assigns to Phase 16); use BullMQ (contradicts ADR-0013). |
-| D3 | Unknown/mismatched `customer_id` on create | **[rec]** **404 `NOT_FOUND`** (non-disclosure): a customer outside the addressed (project, environment) is indistinguishable from an unknown one — no existence oracle. Alternatives: 422 `BUSINESS_RULE_VIOLATION` (would confirm the referenced customer's existence and leak cross-scope information); 400 (validation vs existence confusion). |
-| D4 | Delete-with-payments behavior + FK policy | **[rec]** **Reject** deleting a customer with linked payments: `customers.delete` → **422** `BUSINESS_RULE_VIOLATION` (response already declared on `customers.delete`); `payments.customer_id` FK `ON DELETE RESTRICT` as the DB backstop; contract description refined in place. Alternatives: 409 `CONFLICT` (declared in the envelope but absent from `customers.delete` responses — contract change); `CASCADE` (silently deletes payment history — destructive and hides data); `SET NULL` (contradicts the contract's required non-null `customer_id`). |
-| D5 | Session-mode capability matrix | **[rec]** `payments.read` → **all roles**; `payments.create` → **owner + admin**, following the Phase 5/6 project-resources pattern (payment data is project data; creating payments is administrative in the dashboard). Alternatives: let `member` create payments (possible, but diverges from the established matrix without a stated reason). |
-| D6 | `Idempotency-Key` in Phase 7 | **[rec]** **Accept and validate** the header on `payments.create` (non-empty, ≤ 255 chars; invalid → 400) but do **not** implement replay/deduplication — the same key may produce duplicate payments until Phase 8; document the handoff in the contract description. Alternatives: implement Phase 8 storage/TTL early (violates roadmap sequencing and phase discipline); reject the header (breaks the documented contract for clients that follow it). |
-| D7 | Amount bounds | **[rec]** Strictly positive, format per the contract's `MoneyAmount` (`^[0-9]+(\.[0-9]{1,2})?$`), minor units in `bigint` (no overflow); zero/negative → **400**. No arbitrary upper cap in the MVP (input is format-bounded; `BigInt` storage). Alternatives: an explicit documented cap (e.g., a $ limit) — defensible but invents a product limit the contract never states; store as `int` (restricts to ~$21M and needs a cap decision). |
-| D8 | Money helper module | **[rec]** Introduce a single `common/money` helper for decimal-string ↔ minor-units conversion and USD-only validation, used only at the API boundary (ADR-0002's single helper); no floating-point money anywhere. Alternatives: inline conversions per endpoint (duplicated, drift-prone, violates ADR-0002's explicit single-module requirement). |
-| D9 | `description` length bound | **[rec]** ≤ **500 characters**, trimmed; whitespace-only → 400; absent → `null`. The contract declares no bound, but a column type is required. Alternatives: 200 (aligns with `name` — unnecessarily tight for a description); 2000 (looser, fine either way — product authority to confirm). |
-| D10 | Payment event catalog scope | **[rec]** Emit `payment.created`, `payment.succeeded`, `payment.failed` at the corresponding transitions, payload = the `Payment` as contracted, envelope per phase 1 §9.5, through an internal seam; **no** `payment.processing` event (naming convention is past-tense; noise) and no `webhook_events` persistence in Phase 7. Alternatives: also emit `payment.processing` (useful for sandbox demos but violates the naming convention and adds noise; Phase 16 may revisit); persist events now (front-loads Phase 10's table). |
-| D11 | Access guard reuse | **[rec]** **Mirror** the Phase 6 dual-mode guard in the `payments` module (thin duplicate following the established pattern; zero risk to the committed customers module); extract a shared dual-mode resource guard when the third consumer arrives (refunds, Phase 9). Alternatives: extract the shared guard now (touches and re-tests committed Phase 6 code in Phase 7 — larger change, no additional correctness). |
-| D12 | Session-mode retrieve environment | **[rec]** `payments.retrieve` (session mode) applies **no environment filter** — the `payment_id` is the address and project scoping is the isolation boundary (mirrors phase 6 retrieve/update/delete); API-key mode continues to pin to the key's environment (**404** cross-environment). Alternatives: require `environment` on retrieve (no contract parameter exists; adds complexity without an isolation benefit). |
+| # | Decision | Recommended option [rec] / alternatives | Outcome |
+| - | -------- | ---------------------------------------- | ------- |
+| D1 | Environment mismatch on `payments.list` | **[rec]** Mirror phase 6 D2: session list without `environment` → **400**; API-key explicit conflicting value → **422** `BUSINESS_RULE_VIOLATION` on list and create — requiring an in-place 422 response addition to `payments.list` (ADR-0012). Alternatives: use the contract's existing 400 for list mismatches (no contract change, but inconsistent with create's 422 and weaker semantics); a dedicated `ENVIRONMENT_MISMATCH` code (extra registry entry; not needed). | Implemented as recommended |
+| D2 | Simulation mechanics | **[rec]** Default-success simulation: payments advance `pending → processing → succeeded` with short, configurable delays computed deterministically from `created_at`; advancement is guarded and lazy-safe (read-time catch-up), so restarts never strand a payment; **no** public failure trigger in Phase 7 (`failed` is defined and service-testable; decline/timeout/failure scenarios and `failure_code` catalog are Phase 16). Alternatives: advance only on read (no timers — statuses would lie until read; undermines future webhook events); expose a failure trigger now (front-loads Phase 16 and invents sandbox-scenario config the roadmap assigns to Phase 16); use BullMQ (contradicts ADR-0013). | Implemented as recommended; Phase 10 added the queue-driven sweep (§4.6 note) |
+| D3 | Unknown/mismatched `customer_id` on create | **[rec]** **404 `NOT_FOUND`** (non-disclosure): a customer outside the addressed (project, environment) is indistinguishable from an unknown one — no existence oracle. Alternatives: 422 `BUSINESS_RULE_VIOLATION` (would confirm the referenced customer's existence and leak cross-scope information); 400 (validation vs existence confusion). | Implemented as recommended |
+| D4 | Delete-with-payments behavior + FK policy | **[rec]** **Reject** deleting a customer with linked payments: `customers.delete` → **422** `BUSINESS_RULE_VIOLATION` (response already declared on `customers.delete`); `payments.customer_id` FK `ON DELETE RESTRICT` as the DB backstop; contract description refined in place. Alternatives: 409 `CONFLICT` (declared in the envelope but absent from `customers.delete` responses — contract change); `CASCADE` (silently deletes payment history — destructive and hides data); `SET NULL` (contradicts the contract's required non-null `customer_id`). | Implemented as recommended, plus the P2003 FK-race mapping to 422 |
+| D5 | Session-mode capability matrix | **[rec]** `payments.read` → **all roles**; `payments.create` → **owner + admin**, following the Phase 5/6 project-resources pattern (payment data is project data; creating payments is administrative in the dashboard). Alternatives: let `member` create payments (possible, but diverges from the established matrix without a stated reason). | Implemented as recommended |
+| D6 | `Idempotency-Key` in Phase 7 | **[rec]** **Accept and validate** the header on `payments.create` (non-empty, ≤ 255 chars; invalid → 400) but do **not** implement replay/deduplication — the same key may produce duplicate payments until Phase 8; document the handoff in the contract description. Alternatives: implement Phase 8 storage/TTL early (violates roadmap sequencing and phase discipline); reject the header (breaks the documented contract for clients that follow it). | **Superseded by Phase 8** §4.3.1 (live replay, scope `payments.create`, 24 h window) |
+| D7 | Amount bounds | **[rec]** Strictly positive, format per the contract's `MoneyAmount` (`^[0-9]+(\.[0-9]{1,2})?$`), minor units in `bigint` (no overflow); zero/negative → **400**. No arbitrary upper cap in the MVP (input is format-bounded; `BigInt` storage). Alternatives: an explicit documented cap (e.g., a $ limit) — defensible but invents a product limit the contract never states; store as `int` (restricts to ~$21M and needs a cap decision). | Implemented as recommended |
+| D8 | Money helper module | **[rec]** Introduce a single `common/money` helper for decimal-string ↔ minor-units conversion and USD-only validation, used only at the API boundary (ADR-0002's single helper); no floating-point money anywhere. Alternatives: inline conversions per endpoint (duplicated, drift-prone, violates ADR-0002's explicit single-module requirement). | Implemented as recommended |
+| D9 | `description` length bound | **[rec]** ≤ **500 characters**, trimmed; whitespace-only → 400; absent → `null`. The contract declares no bound, but a column type is required. Alternatives: 200 (aligns with `name` — unnecessarily tight for a description); 2000 (looser, fine either way — product authority to confirm). | Implemented as recommended |
+| D10 | Payment event catalog scope | **[rec]** Emit `payment.created`, `payment.succeeded`, `payment.failed` at the corresponding transitions, payload = the `Payment` as contracted, envelope per phase 1 §9.5, through an internal seam; **no** `payment.processing` event (naming convention is past-tense; noise) and no `webhook_events` persistence in Phase 7. Alternatives: also emit `payment.processing` (useful for sandbox demos but violates the naming convention and adds noise; Phase 16 may revisit); persist events now (front-loads Phase 10's table). | Catalog implemented as recommended; the seam implementation was taken over by Phase 10 |
+| D11 | Access guard reuse | **[rec]** **Mirror** the Phase 6 dual-mode guard in the `payments` module (thin duplicate following the established pattern; zero risk to the committed customers module); extract a shared dual-mode resource guard when the third consumer arrives (refunds, Phase 9). Alternatives: extract the shared guard now (touches and re-tests committed Phase 6 code in Phase 7 — larger change, no additional correctness). | Implemented as recommended; **the deferral is now open** — see D13 |
+| D12 | Session-mode retrieve environment | **[rec]** `payments.retrieve` (session mode) applies **no environment filter** — the `payment_id` is the address and project scoping is the isolation boundary (mirrors phase 6 retrieve/update/delete); API-key mode continues to pin to the key's environment (**404** cross-environment). Alternatives: require `environment` on retrieve (no contract parameter exists; adds complexity without an isolation benefit). | Implemented as recommended |
+| D13 | Consolidate the dual-mode project guard (new, 2026-10-01) | **[rec]** Migrate the payments, customers and refunds controllers to the shared `ProjectAccessGuard`/`ProjectScope` introduced in Phase 10 §14 and delete the three clones, keeping each module's capability matrix and its existing tests. Mechanical, no behavior change; removes four divergent copies of authorization semantics. Alternatives: keep the clones (zero risk today, but a 404/403 divergence becomes possible in any future guard fix, and each fix must be applied four times); consolidate only `payments` (leaves the other two clones and the same drift risk). **Decision requested — §16.3.** | **Open** |
 
 > **Consistency check with prior phases:** none of the proposed decisions contradicts the
 > master specification, Phases 1–6, or ADRs 0001–0014. D1 continues the phase 6 D2
@@ -780,6 +890,10 @@ Phase 7 is complete when:
 > (payment event catalog owned by Phase 7) without building Phase 10 storage. D11 reuses the
 > proven guard mechanics without rewriting committed code. D12 mirrors phase 6 retrieve
 > semantics.
+>
+> **Post-implementation check (2026-10-01):** D1–D5, D7, D9, D10 and D12 are implemented exactly as
+> recommended and remain in force. D6 and the D10/D11 implementation details were superseded by
+> Phases 8 and 10 as recorded in §16. D13 is the only open decision.
 
 ## 15. Dependencies
 
@@ -799,12 +913,69 @@ Phase 7 is complete when:
 - Coordination obligations out of this phase:
   - Phase 8: implement `Idempotency-Key` replay/dedup for `payments.create` (operation
     scope `payments.create`, ADR-0004) and update the `payments.create` description once
-    dedup is live.
+    dedup is live. **Discharged (Phase 8 complete).**
   - Phase 9: refine `Payment`/`Refund` interplay — refund eligibility presumably requires
-    the payment's terminal state; the state machine here is normative.
+    the payment's terminal state; the state machine here is normative. **Discharged (Phase 9
+    complete): only a `succeeded` payment is refundable; the payment stays `succeeded` after
+    a refund (Phase 9 D3), so this state machine needed no extension.**
   - Phase 10: implement event persistence and webhook delivery against the §4.7 catalog
-    and seam; the event envelope is fixed here.
+    and seam; the event envelope is fixed here. **Discharged (Phase 10 complete), including
+    the queue-driven advancement sweep (§4.6 note).**
   - Phase 16: add decline/timeout/failure simulation triggers and the `failure_code`
-    catalog; extend §4.6 without breaking the legal transitions.
-  - Phase 12: record payment lifecycle transitions in audit logs.
-  - Phase 14/17: complete the payments UI polish and browser e2e coverage.
+    catalog; extend §4.6 without breaking the legal transitions. **Open.**
+  - Phase 12: record payment lifecycle transitions in audit logs. **Open.**
+  - Phase 14/17: complete the payments UI polish and browser e2e coverage. **Open.**
+
+## 16. Reconciliation with Later Phases (2026-10-01)
+
+Phase 7 is implemented and its normative content (state machine, simulation mechanics, money
+rules, tenant/environment isolation, capability matrix, data model, contract surface) is
+unchanged. This section is the single place recording what later phases took over, so that
+Phase 7 is not read as requiring behavior that no longer exists.
+
+### 16.1 Superseded behavior
+
+| Phase 7 area | Phase 7 statement | Current owner / effective behavior |
+| ------------ | ----------------- | ---------------------------------- |
+| `Idempotency-Key` on `payments.create` (D6, §4.2 rule 9, §8.10) | Header accepted and validated; **no** replay/dedup; duplicate payments possible with one key | **Phase 8 §4.3.1** — scope `payments.create`, 24 h retention (ADR-0004): a retry replays the stored 201 `Payment`, creates no second payment and emits no second `payment.created`; an absent key stays non-idempotent |
+| Event sink (D10, §4.7) | Module-local sink interface with a no-op/debug implementation; no `webhook_events` persistence | **Phase 10 §5 / ADR-0015** — durable inbound `WEBHOOK_EVENT_PORT`: the event is persisted **inside the payment's transaction** and dispatched post-commit; the terminal edge and its event commit together; re-persisting an event id is a no-op |
+| Event emission drivers (§4.6) | Read-time catch-up plus "the module's own scheduled checks" | **Phase 10 §5.3/D3** — a queue-driven sweep applies the same CAS edges without any read; read-time catch-up remains the backstop |
+| Simulation delays (§4.6) | "Configurable/injectable" | Configured via `PAYMENT_PENDING_DELAY_MS` / `PAYMENT_SETTLEMENT_DELAY_MS` (defaults 1000 / 2000) through the `PAYMENT_DELAYS` token |
+| Access guard (D11, §4.3, §12) | Payments clone its own guard; shared extraction deferred to a third consumer | **Phase 10 §14** added the shared `ProjectAccessGuard`/`ProjectScope` (used by webhooks). The `payments` clone is still in place — consolidation is now **D13 (open)** |
+| Refund interaction (§15 obligation) | "Presumably" requires a terminal state | **Phase 9** — only a `succeeded` payment is refundable; no new payment status is introduced |
+
+### 16.2 Still normative from Phase 7
+
+- The payment **state machine** (`pending → processing → succeeded | failed`, terminal states
+  absorbing, no user-initiated transitions) and the deterministic-from-`created_at` schedule.
+- The **default-success** simulation: no public trigger for `failed`; the `failure_code` catalog
+  belongs to Phase 16.
+- **Money**: integer minor units internally, decimal strings in the API, strictly positive,
+  `usd`-only, single `common/money` helper (ADR-0002/0003).
+- **Tenant and environment isolation**, including 404 non-disclosure for cross-project and
+  cross-environment resources and the session/API-key environment rule (D1).
+- **Session RBAC**: `payments.read` for all member roles, `payments.create` for owner/admin (D5).
+- **Data model**: the `payments` table exactly as specified, including `ON DELETE RESTRICT` to
+  `customers` and the delete-with-payments 422 (D4).
+
+### 16.3 Open questions — decisions requested
+
+1. **OQ-1 (D13) — consolidate the dual-mode project guard?** Four copies of authorization
+   semantics now exist (`payments`, `customers`, `refunds` clones plus the shared guard).
+   **Recommended:** migrate the three clones to `ProjectAccessGuard`/`ProjectScope` in one
+   `refactor/*` change with no behavior change, then delete the clones.
+   **Decision needed:** phase ownership — Phase 18 (Security Hardening) is the natural home for
+   authorization-drift removal; it could equally be a standalone `refactor` before Phase 17.
+2. **OQ-2 — where does the missing payments HTTP-level e2e suite belong?** §9.1 assigned it to
+   Phase 7 and it does not exist (§9.3). **Recommended:** add
+   `apps/api/test/payments.e2e-spec.ts` now as a small, behavior-free follow-up rather than
+   deferring a Phase 7 acceptance obligation to Phase 17. **Decision needed:** confirm, or
+   explicitly accept deferral to Phase 17.
+3. **OQ-3 — `failure_code` catalog (Phase 16 input).** Phase 7 stores the column and sets it only
+   on `failed`, with no trigger; the catalog values are undefined. Needed before Phase 16 can be
+   specified (e.g. `card_declined`, `insufficient_funds`, `processing_timeout`) **and the trigger
+   mechanism** (request-time opt-in parameter vs dashboard-only control) must be decided there, not
+   invented here.
+4. **OQ-4 — contract polish:** `payments.retrieve`'s description does not mention lazy advancement
+   (the `payments.list` description does). A one-line in-place refinement (ADR-0012) would keep the
+   contract self-consistent. **Recommendation:** apply it whenever the contract is next touched.

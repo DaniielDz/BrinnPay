@@ -1,10 +1,11 @@
 import {
   Body, Controller, Get, Headers, HttpCode, HttpStatus, Param,
-  Post, Query, Res, UseGuards,
+  Post, Query, Req, Res, UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 
 import { ListQueryDto, type CursorPage } from '../organizations/cursor';
+import { resolveRequestId } from '../request-id/request-id';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { PaymentsScope, type PaymentsScope as PaymentsScopeValue } from '../payments/payments-scope';
 import { RefundCreateDto } from './dto/refund-create.dto';
@@ -37,8 +38,12 @@ export class RefundsController {
     @Body() dto: RefundCreateDto,
     @Res({ passthrough: true }) response: Response,
     @Headers('idempotency-key') key?: string,
+    @Req() request?: { id?: unknown },
   ): Promise<RefundResponse> {
-    const result = await this.refunds.create(scope, paymentId, dto, key);
+    // The request ID is recorded on the delivery rows the refund's event produces
+    // (phase 10 §4.3.11, F4) and is never part of the envelope.
+    const requestId = request ? resolveRequestId(request) : undefined;
+    const result = await this.refunds.create(scope, paymentId, dto, key, requestId);
     response.status(result.status);
     return result.body;
   }

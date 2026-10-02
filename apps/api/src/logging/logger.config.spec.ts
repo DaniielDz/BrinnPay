@@ -53,6 +53,56 @@ describe('logging base — secure redaction (phase 2 §4.2, §9.2)', () => {
     expect(output).not.toContain('nested-key-secret');
   });
 
+  it('redacts a webhook signing secret in both casings (phase 10 §8)', () => {
+    const { logger, lines } = createCaptureLogger();
+
+    // Nothing logs the secret today: `req.body` is censored wholesale and the
+    // response serializer emits only a status. This assertion exists so the
+    // property no longer *depends* on that invariant — Phase 11 adds request
+    // logging, and `signing_secret` matches no other redaction path because the
+    // wildcard rule covers `*.secret`, not `*.signing_secret`.
+    logger.info({ signing_secret: 'whsec_leaked_value_here' });
+    logger.info({ endpoint: { signingSecret: 'whsec_nested_leak_here' } });
+
+    const output = lines.join('\n');
+    expect(output).not.toContain('whsec_leaked_value_here');
+    expect(output).not.toContain('whsec_nested_leak_here');
+    expect(output).toContain(REDACT_CENSOR);
+  });
+
+  it('redacts the at-rest AES-GCM envelope of a webhook signing secret (phase 10 D8)', () => {
+    const { logger, lines } = createCaptureLogger();
+
+    // Ciphertext is not plaintext, but it is the encrypted body of every
+    // endpoint secret under one key: leaking it hands an offline attacker the
+    // whole set to grind. Redaction paths match whole key names rather than
+    // prefixes, so the existing `secret` / `*.secret` entries do not cover
+    // `secret_ciphertext`.
+    logger.info({
+      secret_ciphertext: 'LEAK-CIPHERTEXT',
+      secretCipher: 'LEAK-CIPHER-CAMEL',
+      secret_iv: 'LEAK-IV',
+      secretIv: 'LEAK-IV-CAMEL',
+      secret_auth_tag: 'LEAK-TAG',
+      secretAuthTag: 'LEAK-TAG-CAMEL',
+      endpoint: { secret_ciphertext: 'LEAK-NESTED-CIPHERTEXT' },
+    });
+
+    const output = lines.join('\n');
+    for (const leak of [
+      'LEAK-CIPHERTEXT',
+      'LEAK-CIPHER-CAMEL',
+      'LEAK-IV',
+      'LEAK-IV-CAMEL',
+      'LEAK-TAG',
+      'LEAK-TAG-CAMEL',
+      'LEAK-NESTED-CIPHERTEXT',
+    ]) {
+      expect(output).not.toContain(leak);
+    }
+    expect(output).toContain(REDACT_CENSOR);
+  });
+
   it('redacts entire request bodies (req.body)', () => {
     const { logger, lines } = createCaptureLogger();
 

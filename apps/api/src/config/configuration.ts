@@ -1,3 +1,8 @@
+import {
+  canonicalizeWebhookHost,
+} from '../webhooks/webhook-url';
+import { resolveWebhookEncryptionKey } from '../webhooks/webhook-crypto';
+
 export interface BrinnPayConfig {
   nodeEnv: string;
   port: number;
@@ -32,6 +37,60 @@ export interface BrinnPayConfig {
   idempotency: {
     retentionHours: number;
   };
+  webhooks: {
+    /**
+     * AES-256-GCM key protecting endpoint signing secrets at rest (D8). Validated
+     * at boot: a missing/short key fails fast exactly like `JWT_SECRET`
+     * (phase 3 §7.7).
+     */
+    secretEncryptionKey: Buffer;
+    /** Total HTTP attempts per delivery, first attempt included (D5). */
+    maxAttempts: number;
+    /** Ceiling of the exponential backoff between attempts, in ms (D5). */
+    maxBackoffMs: number;
+    /** Base of the exponential backoff (attempt 1 is immediate) (D5). */
+    baseBackoffMs: number;
+    /** Connect timeout of an outbound delivery request, in ms (§5.4). */
+    connectTimeoutMs: number;
+    /** Total timeout of an outbound delivery request, in ms (§5.4). */
+    requestTimeoutMs: number;
+    /** Retention window for stored events, in days (D9). */
+    eventRetentionDays: number;
+    /** How often the delivery reconciliation pass runs, in ms (D2, D3). */
+    reconciliationIntervalMs: number;
+    /**
+     * How far back one reconciliation pass may repair, in ms (D2). The pass scans
+     * `created_at >= now - horizon` and `created_at <= now - minAge`, so it never
+     * walks the retention window and a re-enabled endpoint is backfilled only for
+     * recent events. Must be greater than the pass's minimum age; validated when
+     * the delivery policy is built.
+     */
+    reconciliationHorizonMs: number;
+    /**
+     * How long a **failed** queue job's hash is kept in Redis, in ms. Completed
+     * jobs are removed as soon as they finish, so this is the only job data that
+     * outlives the work it did.
+     */
+    failedJobRetentionMs: number;
+    /** How many failed jobs are kept at once, oldest evicted first. */
+    retainedFailedJobs: number;
+    /** How often the payment advancement sweep runs, in ms (D3, F2). */
+    advancementSweepIntervalMs: number;
+    /** How often the retention cleanup pass runs, in ms (D9). */
+    cleanupIntervalMs: number;
+    /**
+     * Optional destination policy (D13). Both lists are `null` by default, which
+     * is the permissive posture a sandbox needs (`localhost`, container names,
+     * tunnel URLs). A deployment that must restrict where BrinnPay may connect
+     * sets one of them; the allowlist wins when both are set.
+     */
+    destinations: {
+      /** Exact hosts permitted; empty means "no allowlist". */
+      allowlist: readonly string[];
+      /** Exact hosts refused; empty means "no denylist". */
+      denylist: readonly string[];
+    };
+  };
 }
 
 const DEFAULT_DATABASE_URL = 'postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public';
@@ -61,6 +120,31 @@ const DEFAULT_PAYMENT_SETTLEMENT_DELAY_MS = 2_000;
 // documented window is; the capability converts it to milliseconds.
 const DEFAULT_IDEMPOTENCY_RETENTION_HOURS = 24;
 
+// Phase 10 webhook delivery defaults (D5/D9). All env-driven so tests run with
+// near-zero delays and a short retention window (deterministic CI) and the
+// sandbox can shorten the schedule.
+const DEFAULT_WEBHOOK_MAX_ATTEMPTS = 5;
+const DEFAULT_WEBHOOK_BASE_BACKOFF_MS = 30_000;
+const DEFAULT_WEBHOOK_MAX_BACKOFF_MS = 3_600_000; // 1 hour
+const DEFAULT_WEBHOOK_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_WEBHOOK_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_WEBHOOK_EVENT_RETENTION_DAYS = 30;
+const DEFAULT_WEBHOOK_RECONCILIATION_INTERVAL_MS = 60_000;
+const DEFAULT_WEBHOOK_RECONCILIATION_HORIZON_MS = 3_600_000; // 1 hour
+const DEFAULT_WEBHOOK_FAILED_JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const DEFAULT_WEBHOOK_RETAINED_FAILED_JOBS = 1_000;
+const DEFAULT_WEBHOOK_ADVANCEMENT_SWEEP_INTERVAL_MS = 5_000;
+const DEFAULT_WEBHOOK_CLEANUP_INTERVAL_MS = 3_600_000;
+
+/**
+ * Ceiling on the retry ladder (D5). The ladder tops out at an hour of backoff
+ * between attempts, so anything past this is not a delivery policy — it is an
+ * unbounded number of outbound requests against a destination that is already
+ * failing. Bounded at boot rather than clamped at runtime so the mistake is
+ * visible immediately.
+ */
+const MAX_WEBHOOK_MAX_ATTEMPTS = 20;
+
 function parsePort(raw: string | undefined, fallback: number): number {
   const value = raw === undefined || raw === '' ? Number(fallback) : Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > 65535) {
@@ -86,6 +170,26 @@ function parsePositiveInt(raw: string | undefined, fallback: number, name: strin
   const value = raw === undefined || raw === '' ? fallback : Number(raw);
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive integer (received "${raw}")`);
+  }
+  return value;
+}
+
+/**
+ * A positive integer with an explicit ceiling, so a configuration mistake fails
+ * at boot instead of becoming runtime behavior. Used for the retry ladder
+ * (`WEBHOOK_MAX_ATTEMPTS`): an unbounded value turns a typo into a retry storm
+ * against a failing destination, which is a self-inflicted outbound denial of
+ * service rather than a safe default.
+ */
+function parseBoundedInt(
+  raw: string | undefined,
+  fallback: number,
+  max: number,
+  name: string,
+): number {
+  const value = parsePositiveInt(raw, fallback, name);
+  if (value > max) {
+    throw new Error(`${name} must be at most ${max} (received "${raw}")`);
   }
   return value;
 }
@@ -226,7 +330,103 @@ export function loadConfiguration(): BrinnPayConfig {
         'IDEMPOTENCY_RETENTION_HOURS',
       ),
     },
+    webhooks: {
+      secretEncryptionKey: resolveWebhookEncryptionKey(
+        process.env.WEBHOOK_ENCRYPTION_KEY,
+        // The test fallback key is committed to this repository, so it is only
+        // safe where nothing can be stored: see `resolveWebhookEncryptionKey`.
+        // The opt-in is refused once a database is in play, because the
+        // connection string falls back to a hardcoded localhost default — "no
+        // DATABASE_URL exported" is not "no database".
+        process.env.WEBHOOK_ALLOW_INSECURE_TEST_KEY === 'true' &&
+          (process.env.DATABASE_URL === undefined || process.env.DATABASE_URL === ''),
+      ),
+      maxAttempts: parseBoundedInt(
+        process.env.WEBHOOK_MAX_ATTEMPTS,
+        DEFAULT_WEBHOOK_MAX_ATTEMPTS,
+        MAX_WEBHOOK_MAX_ATTEMPTS,
+        'WEBHOOK_MAX_ATTEMPTS',
+      ),
+      baseBackoffMs: parsePositiveInt(
+        process.env.WEBHOOK_BASE_BACKOFF_MS,
+        DEFAULT_WEBHOOK_BASE_BACKOFF_MS,
+        'WEBHOOK_BASE_BACKOFF_MS',
+      ),
+      maxBackoffMs: parsePositiveInt(
+        process.env.WEBHOOK_MAX_BACKOFF_MS,
+        DEFAULT_WEBHOOK_MAX_BACKOFF_MS,
+        'WEBHOOK_MAX_BACKOFF_MS',
+      ),
+      connectTimeoutMs: parsePositiveInt(
+        process.env.WEBHOOK_CONNECT_TIMEOUT_MS,
+        DEFAULT_WEBHOOK_CONNECT_TIMEOUT_MS,
+        'WEBHOOK_CONNECT_TIMEOUT_MS',
+      ),
+      requestTimeoutMs: parsePositiveInt(
+        process.env.WEBHOOK_REQUEST_TIMEOUT_MS,
+        DEFAULT_WEBHOOK_REQUEST_TIMEOUT_MS,
+        'WEBHOOK_REQUEST_TIMEOUT_MS',
+      ),
+      eventRetentionDays: parsePositiveInt(
+        process.env.WEBHOOK_EVENT_RETENTION_DAYS,
+        DEFAULT_WEBHOOK_EVENT_RETENTION_DAYS,
+        'WEBHOOK_EVENT_RETENTION_DAYS',
+      ),
+      reconciliationIntervalMs: parsePositiveInt(
+        process.env.WEBHOOK_RECONCILIATION_INTERVAL_MS,
+        DEFAULT_WEBHOOK_RECONCILIATION_INTERVAL_MS,
+        'WEBHOOK_RECONCILIATION_INTERVAL_MS',
+      ),
+      reconciliationHorizonMs: parsePositiveInt(
+        process.env.WEBHOOK_RECONCILIATION_HORIZON_MS,
+        DEFAULT_WEBHOOK_RECONCILIATION_HORIZON_MS,
+        'WEBHOOK_RECONCILIATION_HORIZON_MS',
+      ),
+      failedJobRetentionMs: parsePositiveInt(
+        process.env.WEBHOOK_FAILED_JOB_RETENTION_MS,
+        DEFAULT_WEBHOOK_FAILED_JOB_RETENTION_MS,
+        'WEBHOOK_FAILED_JOB_RETENTION_MS',
+      ),
+      retainedFailedJobs: parsePositiveInt(
+        process.env.WEBHOOK_RETAINED_FAILED_JOBS,
+        DEFAULT_WEBHOOK_RETAINED_FAILED_JOBS,
+        'WEBHOOK_RETAINED_FAILED_JOBS',
+      ),
+      advancementSweepIntervalMs: parsePositiveInt(
+        process.env.WEBHOOK_ADVANCEMENT_SWEEP_INTERVAL_MS,
+        DEFAULT_WEBHOOK_ADVANCEMENT_SWEEP_INTERVAL_MS,
+        'WEBHOOK_ADVANCEMENT_SWEEP_INTERVAL_MS',
+      ),
+      cleanupIntervalMs: parsePositiveInt(
+        process.env.WEBHOOK_CLEANUP_INTERVAL_MS,
+        DEFAULT_WEBHOOK_CLEANUP_INTERVAL_MS,
+        'WEBHOOK_CLEANUP_INTERVAL_MS',
+      ),
+      destinations: {
+        allowlist: parseHostList(process.env.WEBHOOK_DESTINATION_ALLOWLIST),
+        denylist: parseHostList(process.env.WEBHOOK_DESTINATION_DENYLIST),
+      },
+    },
   };
+}
+
+/**
+ * Parses a comma-separated host list.
+ *
+ * Entries go through {@link canonicalizeWebhookHost} so a configured host is
+ * stored in the same form a parsed URL produces. Without it an operator writing
+ * `::1` or `localhost.` would configure an entry that can never match the URL
+ * form `http://[::1]/` or `http://localhost./` — a denylist that silently fails
+ * to deny the host it names, in the one direction that matters.
+ */
+function parseHostList(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map(canonicalizeWebhookHost)
+    .filter((entry) => entry.length > 0);
 }
 
 export default loadConfiguration;

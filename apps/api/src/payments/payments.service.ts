@@ -1,4 +1,4 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
@@ -20,27 +20,31 @@ import { isUuidLike } from '../projects/projects.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { PaymentCreateDto } from './dto/payment-create.dto';
 import type { PaymentListQueryDto } from './dto/payment-list-query.dto';
-import {
-  PAYMENT_EVENT_SINK,
-  type PaymentEvent,
-  type PaymentEventSink,
-  type PaymentEventType,
-} from './payment-events';
+import type { PaymentEvent, PaymentEventType } from './payment-events';
 import {
   PAYMENT_DELAYS,
   scheduledTransition,
+  type LegalTransition,
   type SimulationDelays,
 } from './payment-simulation';
 import type { PaymentRow, PaymentResponse } from './payment-types';
 import { toPaymentResponse } from './payment-types';
 import type { PaymentStatus } from './payment-types';
 import type { PaymentsScope } from './payments-scope';
+import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../webhooks/webhook-events';
 
 const PAYMENT_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Payment not found', 404);
 const CUSTOMER_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Customer not found', 404);
 
 /** The operation scope of this mutation (phase 8 §4.3.1, ADR-0004). */
 const OPERATION_SCOPE: IdempotencyOperationScope = PAYMENTS_CREATE_SCOPE;
+
+/**
+ * The result of applying one edge together with its event:
+ * `lost` means a concurrent writer owns this edge, `rolled-back` means the edge
+ * and its event did not commit and the next pass must retry it.
+ */
+type EdgeOutcome = 'applied' | 'lost' | 'rolled-back';
 
 /**
  * Payments domain service (phase 7 §4.2/§4.6/§4.7).
@@ -71,15 +75,24 @@ const OPERATION_SCOPE: IdempotencyOperationScope = PAYMENTS_CREATE_SCOPE;
  *   (list and retrieve) — `pending → processing → succeeded`; `failed` is
  *   defined (column, transition legality, event) but has no public trigger in
  *   Phase 7 (Phase 16 sandbox);
- * - event emission (D10): `payment.created` on create; `payment.succeeded`/
- *   `payment.failed` when the terminal edge is applied — through the
- *   `PaymentEventSink` seam (no-op in Phase 7, webhooks in Phase 10).
+ * - event emission (D10, phase 10 §5.3/D2): `payment.created` on create;
+ *   `payment.succeeded`/`payment.failed` when the terminal edge is applied —
+ *   through the webhooks module's `WEBHOOK_EVENT_PORT`. The port persists the
+ *   event **inside this module's transaction** and schedules delivery after the
+ *   commit, so an event exists if and only if the mutation committed (§4.3.4)
+ *   and a crash between commit and enqueue cannot lose it. The payment and
+ *   lifecycle rules themselves are unchanged by Phase 10.
+ * - the advancement sweep entry point (phase 10 D3/F2): `advanceDuePayments`
+ *   applies the same CAS-guarded edges a read would, so a terminal event fires
+ *   without anybody reading the payment.
  */
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
-    @Inject(PAYMENT_EVENT_SINK) private readonly events: PaymentEventSink,
+    @Inject(WEBHOOK_EVENT_PORT) private readonly events: WebhookEventPort,
     @Inject(PAYMENT_DELAYS) private readonly delays: SimulationDelays,
     private readonly idempotency: IdempotencyService,
   ) {}
@@ -130,6 +143,7 @@ export class PaymentsService {
     scope: PaymentsScope,
     dto: PaymentCreateDto,
     idempotencyKey?: string,
+    requestId?: string,
   ): Promise<IdempotentResult<PaymentResponse>> {
     return this.idempotency.execute<PaymentResponse>(
       { projectId: scope.project_id, operationScope: OPERATION_SCOPE, key: idempotencyKey },
@@ -173,12 +187,21 @@ export class PaymentsService {
           },
         });
 
-        const event = this.paymentEvent('payment.created', payment, now);
+        // D2: the event row commits atomically with the payment, so a rolled-back
+        // mutation can never leave a phantom event and a committed payment can
+        // never be missing one. An idempotency replay takes none of this path, so
+        // a replayed create emits nothing (§4.3.4).
+        const event = this.paymentEvent('payment.created', payment, now, requestId);
+        await this.events.persist(tx, event);
+
         return {
           status: HttpStatus.CREATED,
           body: toPaymentResponse(payment),
+          // Scheduling is best-effort and strictly post-commit: a job that ran
+          // before the commit would find no row, and a queue failure must not fail
+          // an already-committed mutation (§4.3.7). Reconciliation repairs it.
           afterCommit: () => {
-            this.events.emit(event);
+            void this.events.dispatch(event.id);
           },
         };
       },
@@ -256,6 +279,50 @@ export class PaymentsService {
   // -------------------------------------------------------------------------
 
   /**
+   * The queue-driven advancement sweep (phase 10 §5.3, D3/F2).
+   *
+   * Read-time catch-up alone would mean a `payment.succeeded` webhook is only
+   * emitted when somebody happens to read the payment, so the sandbox would
+   * rarely fire its most important event. This is the **driver** that fixes that:
+   * it finds non-terminal payments whose schedule is due and applies exactly the
+   * same compare-and-set edges {@link advance} applies, across every project and
+   * environment.
+   *
+   * It adds no lifecycle rule: `advance()` re-derives the transition from the row
+   * it just read, so the sweep and a concurrent read both go through the same CAS
+   * and only the winner emits. Terminal states are absorbing, so a payment cannot
+   * be advanced twice or regressed.
+   *
+   * The batch is bounded so a large backlog cannot monopolize the worker, and the
+   * next pass continues where this one stopped.
+   */
+  async advanceDuePayments(now: Date, batchSize = 100): Promise<number> {
+    // No transition can be due before the whole schedule has elapsed, so the
+    // bound is a cheap indexed filter rather than a full non-terminal scan.
+    const scheduleCompleteAt = new Date(
+      now.getTime() - (this.delays.pendingDelayMs + this.delays.settlementDelayMs),
+    );
+    const due = await this.prisma.payment.findMany({
+      where: {
+        status: { in: ['pending', 'processing'] },
+        createdAt: { lte: scheduleCompleteAt },
+      },
+      orderBy: { id: 'asc' },
+      take: batchSize,
+    });
+
+    let advanced = 0;
+    for (const row of due) {
+      const before = row.status;
+      const after = await this.advance(row, now);
+      if (after.status !== before) {
+        advanced += 1;
+      }
+    }
+    return advanced;
+  }
+
+  /**
    * Advances every non-terminal payment of the (project, environment) whose
    * scheduled time has passed (read-time catch-up). Each edge is a guarded
    * compare-and-set (`updateMany` on the expected status, affected-count
@@ -304,21 +371,17 @@ export class PaymentsService {
       }
       due = true;
 
-      const result = await this.prisma.payment.updateMany({
-        where: { id: current.id, status: transition.from },
-        data: { status: transition.to, updatedAt: now },
-      });
-      if (result.count === 0) {
-        // A concurrent writer applied this edge (or holds a newer state);
+      const outcome = await this.applyEdge(current, transition, now);
+      if (outcome !== 'applied') {
+        // `lost`: a concurrent writer applied this edge (or holds a newer state);
         // never advance or regress from a stale snapshot.
+        // `rolled-back`: the edge and its event did not commit together, so the
+        // payment is unchanged and the next read or sweep pass retries it.
         break;
       }
 
       wrote = true;
       current = { ...current, status: transition.to, updatedAt: now };
-      if (transition.event) {
-        this.events.emit(this.paymentEvent(transition.event, current, now));
-      }
     }
 
     if (!wrote && !due) {
@@ -397,8 +460,87 @@ export class PaymentsService {
   // Events (D10)
   // -------------------------------------------------------------------------
 
+  /**
+   * Applies one compare-and-set edge together with the terminal event it
+   * implies, in a single transaction: the status change and the event commit or
+   * roll back as one (D2). A payment can therefore never reach a terminal state
+   * without its event, and no event can describe a rolled-back change.
+   *
+   * Only the CAS winner reaches the event insert, so `payment.succeeded` or
+   * `payment.failed` is persisted exactly once per edge no matter how many
+   * readers or sweep passes race. The window is narrow but not free: committing
+   * the CAS on its own — the pre-Phase-10 shape — meant a crash or database
+   * error before the event insert lost the event permanently, because the
+   * payment was already terminal and no later pass re-derived the edge.
+   *
+   * A rollback is logged rather than propagated: it must not fail the read that
+   * triggered it, and because the status change did not commit, the next read or
+   * sweep pass re-applies the edge and retries the event.
+   */
+  private async applyEdge(
+    current: PaymentRow,
+    transition: LegalTransition,
+    now: Date,
+  ): Promise<EdgeOutcome> {
+    let claimed = false;
+    // Captured inside the transaction so the delivery is scheduled after it
+    // commits, never before (a job that ran early would find no rows).
+    let eventId: string | null = null;
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          const result = await tx.payment.updateMany({
+            where: { id: current.id, status: transition.from },
+            data: { status: transition.to, updatedAt: now },
+          });
+          if (result.count === 0) {
+            return; // lost the race; nothing was written
+          }
+          claimed = true;
+          if (transition.event) {
+            const updated = { ...current, status: transition.to, updatedAt: now };
+            const event = this.paymentEvent(transition.event, updated, now);
+            eventId = event.id;
+            await this.events.persist(tx, event);
+          }
+        },
+        // The fan-out inserts one delivery per subscribed endpoint, so this
+        // transaction is not as short as the CAS alone (same budget the detached
+        // path used before the edge and its event shared a commit).
+        { maxWait: 5_000, timeout: 10_000 },
+      );
+    } catch (error) {
+      this.logger.error(
+        {
+          payment_id: current.id,
+          project_id: current.projectId,
+          from: transition.from,
+          to: transition.to,
+          reason: error instanceof Error ? error.message : 'unknown error',
+        },
+        'Could not apply a payment edge and its event atomically; the next pass will retry.',
+      );
+      return 'rolled-back';
+    }
+
+    if (!claimed) {
+      return 'lost';
+    }
+    if (eventId) {
+      // Best-effort and strictly post-commit (§4.3.7): a queue failure is logged
+      // inside the port and reconciliation creates the missing deliveries later.
+      void this.events.dispatch(eventId);
+    }
+    return 'applied';
+  }
+
   /** Builds the phase 1 §9.5 envelope around the contracted `Payment`. */
-  private paymentEvent(type: PaymentEventType, row: PaymentRow, at: Date): PaymentEvent {
+  private paymentEvent(
+    type: PaymentEventType,
+    row: PaymentRow,
+    at: Date,
+    requestId?: string,
+  ): PaymentEvent {
     return {
       id: uuidv7(),
       type,
@@ -406,6 +548,7 @@ export class PaymentsService {
       data: toPaymentResponse(row),
       environment: row.environment as Environment,
       project_id: row.projectId,
+      request_id: requestId ?? null,
     };
   }
 }

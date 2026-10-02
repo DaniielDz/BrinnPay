@@ -12,7 +12,8 @@ import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { isUuidLike } from '../projects/projects.service';
 import type { RefundCreateDto } from './dto/refund-create.dto';
-import { REFUND_EVENT_SINK, type RefundEventSink } from './refund-events';
+import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../webhooks/webhook-events';
+import type { RefundEvent } from './refund-events';
 import { toRefundResponse, type RefundResponse } from './refund-types';
 
 const notFound = () => new ApiError(ErrorCode.NOT_FOUND, 'Refund not found', 404);
@@ -26,7 +27,7 @@ export class RefundsService {
     private readonly prisma: PrismaService,
     private readonly payments: PaymentsService,
     private readonly idempotency: IdempotencyService,
-    @Inject(REFUND_EVENT_SINK) private readonly events: RefundEventSink,
+    @Inject(WEBHOOK_EVENT_PORT) private readonly events: WebhookEventPort,
   ) {}
 
   async list(scope: PaymentsScope, paymentId: string, query: ListQueryDto): Promise<CursorPage<RefundResponse>> {
@@ -53,13 +54,14 @@ export class RefundsService {
     paymentId: string,
     dto: RefundCreateDto,
     key?: string,
+    requestId?: string,
   ): Promise<IdempotentResult<RefundResponse>> {
     // An already-due payment can become succeeded on read. The guard has
     // authorized this payment before any idempotency lookup or side effect.
     await this.payments.retrieve(scope, paymentId);
     return this.idempotency.execute(
       { projectId: scope.project_id, operationScope: REFUNDS_CREATE_SCOPE, key },
-      (tx) => this.createInTransaction(tx, scope, paymentId, dto),
+      (tx) => this.createInTransaction(tx, scope, paymentId, dto, requestId),
       {
         transactionalWithoutKey: true,
         validateReplay: (body) => {
@@ -77,6 +79,7 @@ export class RefundsService {
     scope: PaymentsScope,
     paymentId: string,
     dto: RefundCreateDto,
+    requestId?: string,
   ) {
     // Serialize *all* attempts against the same payment, even without an
     // idempotency key. Lock before reading the current status and balance;
@@ -111,13 +114,21 @@ export class RefundsService {
       },
     });
     const body = toRefundResponse(row, payment);
-    const event = {
-      id: uuidv7(), type: 'refund.created' as const, created_at: now,
+    // Phase 10 D2: the `refund.created` event commits atomically with the refund,
+    // so it exists if and only if the refund was committed (§4.3.4). An
+    // idempotency replay never reaches this code, so a replayed refund emits
+    // nothing.
+    const event: RefundEvent = {
+      id: uuidv7(), type: 'refund.created', created_at: now,
       data: body, environment: body.environment, project_id: payment.projectId,
+      request_id: requestId ?? null,
     };
+    await this.events.persist(tx, event);
     return {
       status: HttpStatus.CREATED, body,
-      afterCommit: () => { void this.events.emit(event); },
+      // Scheduling is post-commit and best-effort (§4.3.7); reconciliation repairs
+      // a failed enqueue.
+      afterCommit: () => { void this.events.dispatch(event.id); },
     };
   }
 

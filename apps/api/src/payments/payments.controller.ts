@@ -8,12 +8,14 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 
 import type { CursorPage } from '../organizations/cursor';
+import { resolveRequestId } from '../request-id/request-id';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { PaymentCreateDto } from './dto/payment-create.dto';
 import { PaymentListQueryDto } from './dto/payment-list-query.dto';
@@ -63,11 +65,16 @@ export class PaymentsController {
     @Body() dto: PaymentCreateDto,
     @Res({ passthrough: true }) response: Response,
     @Headers('idempotency-key') idempotencyKey?: string,
+    @Req() request?: { id?: unknown },
   ): Promise<PaymentResponse> {
     // The status comes from the idempotency capability, so a replayed retry
     // answers with the stored status of the original execution (phase 8 §4.2.4,
     // §4.3.2) instead of recomputing it.
-    const result = await this.payments.create(scope, dto, idempotencyKey);
+    //
+    // The request ID is recorded on the delivery rows the `payment.created` event
+    // produces (phase 10 §4.3.11, F4) and is never part of the envelope.
+    const requestId = request ? resolveRequestId(request) : undefined;
+    const result = await this.payments.create(scope, dto, idempotencyKey, requestId);
     response.status(result.status);
     return result.body;
   }

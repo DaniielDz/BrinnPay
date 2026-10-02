@@ -52,6 +52,12 @@ services:
       # JWT_SECRET in the local .env (e.g. `openssl rand -base64 48`).
       JWT_SECRET: ${JWT_SECRET:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Phase 10: the key protecting endpoint signing secrets at rest (D8). Set
+      # WEBHOOK_ENCRYPTION_KEY in the local .env (`openssl rand -base64 32`);
+      # the worker needs the SAME key to sign deliveries.
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
+      WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
+      WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
     ports:
       - "${API_PORT:-3000}:3000"
     depends_on:
@@ -72,6 +78,38 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  # Phase 10 D14: the webhook worker is a separate process with its own
+  # entrypoint (`apps/api/src/worker.ts`). The API only enqueues; this process
+  # signs and performs the delivery attempts, runs the reconciliation and payment
+  # advancement sweeps, and prunes expired events. It shares the database, Redis,
+  # and the webhook encryption key, and exposes no HTTP port.
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    command: ["pnpm", "worker:dev"]
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: brinnpay-webhook-worker
+      DATABASE_URL: postgresql://${POSTGRES_USER:-brinnpay}:${POSTGRES_PASSWORD:-brinnpay}@postgres:5432/${POSTGRES_DB:-brinnpay}?schema=public
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Required outside test: imported through the same module graph as the API.
+      JWT_SECRET: ${JWT_SECRET:-}
+      # Must equal the API's value: a mismatch would make every delivery fail its
+      # signature (D8).
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
+      WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
+      WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../apps/api/src:/app/apps/api/src
+      - ../apps/api/test:/app/apps/api/test
 
   web:
     build:

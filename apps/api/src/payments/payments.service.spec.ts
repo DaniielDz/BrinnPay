@@ -5,7 +5,7 @@ import {
   type IdempotencyRequest,
   type IdempotentExecution,
 } from '../idempotency/idempotency.service';
-import type { PaymentEvent, PaymentEventSink } from './payment-events';
+import type { PaymentEvent } from './payment-events';
 import { DEFAULT_SIMULATION_DELAYS, type SimulationDelays } from './payment-simulation';
 import type { PaymentRow } from './payment-types';
 import type { PaymentsScope } from './payments-scope';
@@ -69,8 +69,31 @@ function paymentRow(
   };
 }
 
-interface Sink {
+/**
+ * Test double for the webhooks module's inbound `WEBHOOK_EVENT_PORT` (phase 10
+ * §4.1, D2). `emit` records persistence through the caller's transaction handle
+ * (`persist`) — the only write path left — so the assertions below read in terms
+ * of "the payments module produced this event", while `dispatch` records the
+ * strictly post-commit scheduling call. The port's own guarantees (transactional
+ * persistence, reconciliation) are proved in
+ * `src/webhooks/webhook-event.service.spec.ts`.
+ */
+interface Port {
   emit: jest.Mock;
+  persist: jest.Mock;
+  dispatch: jest.Mock;
+}
+
+function makePort(): Port {
+  const port: Port = {
+    emit: jest.fn(),
+    persist: jest.fn(),
+    dispatch: jest.fn(async () => undefined),
+  };
+  port.persist.mockImplementation(async (_tx: unknown, event: unknown) => {
+    port.emit(event);
+  });
+  return port;
 }
 
 interface IdempotencyStub {
@@ -100,18 +123,20 @@ function idempotencyStub(prisma: unknown): IdempotencyStub {
 
 function setup(prisma: unknown, delays: SimulationDelays = DEFAULT_SIMULATION_DELAYS): {
   service: PaymentsService;
-  sink: Sink;
+  /** The port double; also aliased as `sink` for the event assertions below. */
+  port: Port;
+  sink: Port;
   idempotency: IdempotencyStub;
 } {
-  const sink: Sink = { emit: jest.fn() };
+  const port = makePort();
   const idempotency = idempotencyStub(prisma);
   const service = new PaymentsService(
     prisma as unknown as PrismaService,
-    { emit: sink.emit } as unknown as PaymentEventSink,
+    port as unknown as PaymentsService['events'],
     delays,
     idempotency as unknown as PaymentsService['idempotency'],
   );
-  return { service, sink, idempotency };
+  return { service, port, sink: port, idempotency };
 }
 
 /**
@@ -120,7 +145,7 @@ function setup(prisma: unknown, delays: SimulationDelays = DEFAULT_SIMULATION_DE
  * the module boundary (phase 8 §7.8, §7.2) rather than through a stub.
  */
 function setupWithRealIdempotency(prisma: Record<string, unknown>) {
-  const sink: Sink = { emit: jest.fn() };
+  const port = makePort();
   const idempotencyRecord = {
     createMany: jest.fn(async () => ({ count: 1 })),
     findUnique: jest.fn(async () => null),
@@ -139,13 +164,13 @@ function setupWithRealIdempotency(prisma: Record<string, unknown>) {
   };
   const service = new PaymentsService(
     client as unknown as PrismaService,
-    { emit: sink.emit } as unknown as PaymentEventSink,
+    port as unknown as PaymentsService['events'],
     DEFAULT_SIMULATION_DELAYS,
     new IdempotencyService(client as unknown as PrismaService, {
       retentionMs: DEFAULT_IDEMPOTENCY_RETENTION_MS,
     }),
   );
-  return { service, sink, idempotencyRecord, client };
+  return { service, port, sink: port, idempotencyRecord, client };
 }
 
 describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () => {
@@ -158,12 +183,16 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       updateMany: jest.Mock;
     };
     customer: { findFirst: jest.Mock };
+    $transaction: jest.Mock;
   };
 
   beforeEach(() => {
     prisma = {
       payment: { findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), updateMany: jest.fn() },
       customer: { findFirst: jest.fn() },
+      // Edge + event commits as one; the double hands the callback the same
+      // client, so `tx.payment.updateMany` is the mock the assertions inspect.
+      $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma)),
     };
   });
 
@@ -451,14 +480,17 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
     it('emits payment.created only after the mutation commits, and never for a replay (phase 8 §10)', async () => {
       prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
       prisma.payment.create.mockResolvedValue(paymentRow());
-      const sink: Sink = { emit: jest.fn() };
+      const port = makePort();
       const calls: string[] = [];
       // The capability commits first, then runs the after-commit effects.
       const idempotency = {
         execute: jest.fn(
           async (request: IdempotencyRequest, run: (tx: unknown) => Promise<IdempotentExecution<unknown>>) => {
             const execution = await run(prisma);
-            expect(sink.emit).not.toHaveBeenCalled();
+            // D2: the event is already persisted (inside the transaction) at
+            // this point; only the *scheduling* call is deferred to after-commit.
+            expect(port.emit).toHaveBeenCalledTimes(1);
+            expect(port.dispatch).not.toHaveBeenCalled();
             calls.push('committed');
             execution.afterCommit?.();
             return { status: execution.status, body: execution.body, replayed: false };
@@ -468,7 +500,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       };
       const service = new PaymentsService(
         prisma as unknown as PrismaService,
-        { emit: sink.emit } as unknown as PaymentEventSink,
+        port as unknown as PaymentsService['events'],
         DEFAULT_SIMULATION_DELAYS,
         idempotency as unknown as PaymentsService['idempotency'],
       );
@@ -480,14 +512,25 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       );
 
       expect(calls).toEqual(['committed']);
-      expect(sink.emit).toHaveBeenCalledTimes(1);
-      expect(sink.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.created' }));
+      expect(port.persist).toHaveBeenCalledTimes(1);
+      // Persisted through the caller's transaction handle, so it commits with the
+      // payment (D2).
+      expect(port.persist).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ type: 'payment.created' }),
+      );
+      expect(port.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.created' }));
+      // Scheduling is strictly post-commit and must not be persisted twice.
+      expect(port.dispatch).toHaveBeenCalledTimes(1);
+      // The create path persists through the idempotency transaction it was
+      // handed; it never opens a nested one of its own.
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('never runs the post-commit effect of a replayed execution (phase 8 §4.3.1)', async () => {
       prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
       prisma.payment.create.mockResolvedValue(paymentRow());
-      const sink: Sink = { emit: jest.fn() };
+      const port = makePort();
       const stored = paymentRow();
       const idempotency = {
         // A committed record exists for this key: the capability replays it
@@ -497,7 +540,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       };
       const service = new PaymentsService(
         prisma as unknown as PrismaService,
-        { emit: sink.emit } as unknown as PaymentEventSink,
+        port as unknown as PaymentsService['events'],
         DEFAULT_SIMULATION_DELAYS,
         idempotency as unknown as PaymentsService['idempotency'],
       );
@@ -510,7 +553,8 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
 
       expect(result.replayed).toBe(true);
       expect(prisma.payment.create).not.toHaveBeenCalled();
-      expect(sink.emit).not.toHaveBeenCalled();
+      expect(port.emit).not.toHaveBeenCalled();
+      expect(port.dispatch).not.toHaveBeenCalled();
     });
 
     it('rejects a zero amount → 400 field error on amount (D7)', async () => {
@@ -660,6 +704,24 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         expect.objectContaining({ type: 'payment.succeeded' }),
       );
       expect(sink.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.created' }));
+    });
+
+    it('rolls back the edge when its event cannot be persisted, so the next pass retries it (D2)', async () => {
+      // The status change and the event are one commit. If the event insert
+      // fails, the payment must not become terminal with no event: it stays
+      // `processing` and the next read or sweep pass re-applies the edge.
+      const processing = paymentRow({ status: 'processing' });
+      prisma.payment.findFirst.mockResolvedValue(processing);
+      prisma.payment.updateMany.mockResolvedValue({ count: 1 });
+      prisma.payment.findUnique.mockResolvedValue(processing);
+      const { service, sink, port } = setup(prisma);
+      port.persist.mockRejectedValueOnce(new Error('event insert failed'));
+
+      await expect(service.retrieve(sessionScope(), PAYMENT_ID)).resolves.toMatchObject({
+        status: 'processing',
+      });
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(sink.emit).not.toHaveBeenCalled();
     });
 
     it('CAS loss under contention: stops advancing and re-reads the authoritative row (D2)', async () => {

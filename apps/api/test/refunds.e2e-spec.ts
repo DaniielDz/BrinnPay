@@ -7,7 +7,8 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { uuidv7 } from '../src/common/uuid/uuid';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { REFUND_EVENT_SINK, type RefundEvent } from '../src/refunds/refund-events';
+import type { RefundEvent } from '../src/refunds/refund-events';
+import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../src/webhooks/webhook-events';
 
 const stamp = Date.now().toString(36);
 const password = 'password-123';
@@ -23,8 +24,11 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
 
   beforeAll(async () => {
     const ref = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(REFUND_EVENT_SINK)
-      .useValue({ emit: (event: RefundEvent) => { events.push(event); } })
+      .overrideProvider(WEBHOOK_EVENT_PORT)
+      .useValue({
+        persist: async (_tx: unknown, event: RefundEvent) => { events.push(event); },
+        dispatch: async () => undefined,
+      } satisfies WebhookEventPort)
       .compile();
     app = ref.createNestApplication();
     configureApp(app, app.get(ConfigService));
@@ -208,7 +212,10 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
       .set('Authorization', `Bearer ${key.body.key}`)
       .set('Idempotency-Key', 'expires-test').send({ amount: '9.00' }).expect(201);
     expect(replay.body).toEqual(first.body);
-    expect(events).toHaveLength(1);
+    // The port carries the payment's own events too (phase 10 §4.1.2), so the
+    // assertion is on the refund events this request produced: the idempotent
+    // replay created none.
+    expect(events.filter((item) => item.type === 'refund.created')).toHaveLength(1);
     await prisma.idempotencyRecord.updateMany({
       where: { projectId: a.projectId, operationScope: 'refunds.create' },
       data: { expiresAt: new Date(0) },
@@ -216,6 +223,6 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
     const next = await call(a.token).post(url).set('Idempotency-Key', 'expires-test')
       .send({}).expect(201);
     expect(next.body.amount).toBe('7.00');
-    expect(events).toHaveLength(2);
+    expect(events.filter((item) => item.type === 'refund.created')).toHaveLength(2);
   });
 });
