@@ -1,9 +1,10 @@
-import { Controller, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import { Controller, HttpCode, HttpStatus, Param, Post, Req, UseGuards } from '@nestjs/common';
 
 import { CurrentUser, type AuthUser } from '../auth/current-user';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
+import { resolveRequestId } from '../request-id/request-id';
 import { OrganizationsService, type OrganizationMemberResponse } from './organizations.service';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,12 +26,13 @@ export class InvitationsAcceptController {
   accept(
     @CurrentUser() user: AuthUser,
     @Param('invitation_id') invitationId: string,
+    @Req() request: { id?: unknown },
   ): Promise<OrganizationMemberResponse> {
     // A malformed ID cannot identify a real invitation; the same generic
     // 404 the service returns for unknown/mismatched invitations (D6).
     if (!UUID_PATTERN.test(invitationId)) {
       throw new ApiError(ErrorCode.NOT_FOUND, 'Invitation not found', 404);
     }
-    return this.organizations.acceptInvitation(user, invitationId);
+    return this.organizations.acceptInvitation(user, invitationId, resolveRequestId(request));
   }
 }

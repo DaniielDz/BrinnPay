@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import { Prisma } from '../../generated/prisma/client';
+import { AUDIT_LOG_PORT, type AuditLogPort } from '../audit-logging/audit-log.port';
+import { userActor } from '../audit-logging/audit-scope';
 import { type PublicUser } from '../auth/current-user';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
@@ -67,10 +69,18 @@ function isPrismaError(error: unknown, code: string): boolean {
  * caller's membership, so this layer enforces target restrictions and business
  * invariants (last-owner, owner-granting, invitation lifecycle) — never tenant
  * scoping, which belongs to the guard.
+ *
+ * Phase 12 §5.3: invitation and membership changes record their access-control
+ * entries in the same transaction as the change (§6.2, D7), addressed to the
+ * organization being changed and attributed to the acting session member.
+ * Organization CRUD itself is deliberately not audited (§12).
  */
 @Injectable()
 export class OrganizationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
+  ) {}
 
   // -------------------------------------------------------------------------
   // Organizations
@@ -206,6 +216,7 @@ export class OrganizationsService {
     actor: ResolvedMembership,
     targetUserId: string,
     newRole: Role,
+    requestId?: string,
   ): Promise<OrganizationMemberResponse> {
     const target = await this.prisma.organizationMember.findUnique({
       where: { organizationId_userId: { organizationId, userId: targetUserId } },
@@ -245,12 +256,27 @@ export class OrganizationsService {
       await this.assertOwnerRemains(organizationId);
     }
 
-    const member = await this.prisma.organizationMember.update({
-      where: { id: target.id },
-      data: { role: newRole, updatedAt: new Date() },
-      include: { user: true },
+    const previousRole = target.role;
+    return this.prisma.$transaction(async (tx) => {
+      const member = await tx.organizationMember.update({
+        where: { id: target.id },
+        data: { role: newRole, updatedAt: new Date() },
+        include: { user: true },
+      });
+      // Phase 12 §5.3/§6.2: the role change and its `member.role_changed`
+      // entry commit together (D7); self-changes record the member as their
+      // own actor (§5.3).
+      await this.audit.record(tx, {
+        action: 'member.role_changed',
+        organization_id: organizationId,
+        actor: userActor(actor.user_id),
+        member_user_id: target.userId,
+        previous_role: previousRole,
+        new_role: newRole,
+        request_id: requestId ?? null,
+      });
+      return toMemberResponse(member);
     });
-    return toMemberResponse(member);
   }
 
   /**
@@ -262,6 +288,7 @@ export class OrganizationsService {
     organizationId: string,
     actor: ResolvedMembership,
     targetUserId: string,
+    requestId?: string,
   ): Promise<void> {
     const target = await this.prisma.organizationMember.findUnique({
       where: { organizationId_userId: { organizationId, userId: targetUserId } },
@@ -285,7 +312,22 @@ export class OrganizationsService {
       await this.assertOwnerRemains(organizationId);
     }
 
-    await this.prisma.organizationMember.delete({ where: { id: target.id } });
+    const removedRole = target.role;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.organizationMember.delete({ where: { id: target.id } });
+      // Phase 12 §5.3/§6.2: the removal and its `member.removed` entry commit
+      // together (D7). The entry keeps the removed member's plain id and role
+      // — no FK points at the membership, so the trail survives the delete
+      // (§6.1, D8).
+      await this.audit.record(tx, {
+        action: 'member.removed',
+        organization_id: organizationId,
+        actor: userActor(actor.user_id),
+        member_user_id: target.userId,
+        role: removedRole,
+        request_id: requestId ?? null,
+      });
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -312,12 +354,17 @@ export class OrganizationsService {
    * Create invitation (§4.2, D5): normalized email; `role: owner` requires the
    * actor to be an `owner`; conflicts: existing member or an already-pending
    * invitation for the email (409). The partial unique index is the DB guard.
+   *
+   * Phase 12 §5.3/§6.2: the invitation row and its `invitation.created` entry
+   * share one transaction (D7); `data` carries only the role — never the
+   * invited email (D13).
    */
   async createInvitation(
     organizationId: string,
     actor: ResolvedMembership,
     email: string,
     role: Role,
+    requestId?: string,
   ): Promise<InvitationResponse> {
     const normalizedEmail = this.normalizeEmail(email);
 
@@ -351,18 +398,28 @@ export class OrganizationsService {
 
     const now = new Date();
     try {
-      const invitation = await this.prisma.invitation.create({
-        data: {
-          id: uuidv7(),
-          organizationId,
-          email: normalizedEmail,
+      return await this.prisma.$transaction(async (tx) => {
+        const invitation = await tx.invitation.create({
+          data: {
+            id: uuidv7(),
+            organizationId,
+            email: normalizedEmail,
+            role,
+            status: 'pending',
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        await this.audit.record(tx, {
+          action: 'invitation.created',
+          organization_id: organizationId,
+          actor: userActor(actor.user_id),
+          invitation_id: invitation.id,
           role,
-          status: 'pending',
-          createdAt: now,
-          updatedAt: now,
-        },
+          request_id: requestId ?? null,
+        });
+        return toInvitationResponse(invitation);
       });
-      return toInvitationResponse(invitation);
     } catch (error) {
       if (isPrismaError(error, 'P2002')) {
         throw new ApiError(ErrorCode.CONFLICT, 'A pending invitation exists for this email', 409);
@@ -374,8 +431,17 @@ export class OrganizationsService {
   /**
    * Cancel invitation (§4.2, D5): pending → canceled (204); already-canceled
    * → 204 (idempotent no-op); accepted → 422 (historical record).
+   *
+   * Phase 12 §5.3: only the transition that actually writes a state records
+   * `invitation.canceled` — an idempotent re-cancel changes nothing and writes
+   * nothing (§4.2 rule 1).
    */
-  async cancelInvitation(organizationId: string, invitationId: string): Promise<void> {
+  async cancelInvitation(
+    organizationId: string,
+    invitationId: string,
+    actor: ResolvedMembership,
+    requestId?: string,
+  ): Promise<void> {
     const invitation = await this.prisma.invitation.findUnique({
       where: { id: invitationId },
     });
@@ -393,9 +459,19 @@ export class OrganizationsService {
 
     if (invitation.status === 'pending') {
       const now = new Date();
-      await this.prisma.invitation.update({
-        where: { id: invitation.id },
-        data: { status: 'canceled', canceledAt: now, updatedAt: now },
+      await this.prisma.$transaction(async (tx) => {
+        await tx.invitation.update({
+          where: { id: invitation.id },
+          data: { status: 'canceled', canceledAt: now, updatedAt: now },
+        });
+        await this.audit.record(tx, {
+          action: 'invitation.canceled',
+          organization_id: organizationId,
+          actor: userActor(actor.user_id),
+          invitation_id: invitation.id,
+          role: invitation.role,
+          request_id: requestId ?? null,
+        });
       });
     }
   }
@@ -406,7 +482,11 @@ export class OrganizationsService {
    * accounts (404 with a generic message). Accept marks the invitation
    * `accepted` and creates the membership atomically.
    */
-  async acceptInvitation(actor: PublicUser, invitationId: string): Promise<OrganizationMemberResponse> {
+  async acceptInvitation(
+    actor: PublicUser,
+    invitationId: string,
+    requestId?: string,
+  ): Promise<OrganizationMemberResponse> {
     const invitation = await this.prisma.invitation.findUnique({
       where: { id: invitationId },
     });
@@ -456,6 +536,17 @@ export class OrganizationsService {
             updatedAt: now,
           },
           include: { user: true },
+        });
+        // Phase 12 §5.3/§6.2: the membership and its `member.joined` entry
+        // commit together (D7); the actor is the joining user (self).
+        await this.audit.record(tx, {
+          action: 'member.joined',
+          organization_id: invitation.organizationId,
+          actor: userActor(actor.id),
+          member_user_id: actor.id,
+          role: invitation.role,
+          invitation_id: invitation.id,
+          request_id: requestId ?? null,
         });
         return toMemberResponse(member);
       });

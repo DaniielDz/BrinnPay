@@ -148,19 +148,27 @@ export class RefreshSessionService {
     return { status: 'rotated', token: next.token, sessionId: next.sessionId, userId: session.userId };
   }
 
-  async revoke(token: string, now = new Date()): Promise<void> {
+  /**
+   * Revokes one refresh session (logout). Returns the id of the user whose
+   * session was revoked, or `null` when nothing was revoked (unknown,
+   * already-revoked or expired token) — phase 12 §5.2 needs that distinction
+   * to record `user.logged_out` only for a session that actually ended, while
+   * a rejected logout records nothing.
+   */
+  async revoke(token: string, now = new Date()): Promise<string | null> {
     const session = await this.prisma.refreshSession.findUnique({
       where: { tokenHash: this.hashToken(token) },
     });
 
     if (!session || session.revokedAt !== null || session.expiresAt <= now) {
-      return;
+      return null;
     }
 
     await this.prisma.refreshSession.update({
       where: { id: session.id },
       data: { revokedAt: now },
     });
+    return session.userId;
   }
 
   async revokeAllForUser(userId: string, excludeSessionId?: string, now = new Date()): Promise<void> {

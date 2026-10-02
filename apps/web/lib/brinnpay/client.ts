@@ -912,3 +912,55 @@ export function listRequestLogs(
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Audit logs (phase 12 §4.3/§8)
+// ---------------------------------------------------------------------------
+
+/** Allowlisted `data` scalars of an audit entry (phase 12 §4.2 rule 7): ids,
+ *  roles, monetary amounts and the correlation `request_id` — never secrets,
+ *  emails, headers, bodies or free text, so nothing here can carry PII beyond
+ *  the bounded values the catalog permits. */
+export type AuditData = Record<string, string | number | boolean | null>;
+
+/** `AuditLogEntry` as contracted (phase 12, `logs.listAuditLogs`): an
+ *  immutable, organization-scoped record of who did what, to which resource,
+ *  when. `project_id`/`environment` are the additive D6 attribution columns —
+ *  `null` (or absent) for organization- or user-scoped actions. */
+export interface AuditLogEntry {
+  id: string;
+  organization_id: string;
+  actor_type: 'user' | 'api_key';
+  actor_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  project_id?: string | null;
+  environment?: Environment | null;
+  data?: AuditData;
+  created_at: string;
+}
+
+/** D11: no filters exist beyond pagination — the contract has none, and the
+ *  viewer mirrors that exactly. */
+export interface ListAuditLogsQuery {
+  limit?: number;
+  cursor?: string;
+}
+
+/** Session-only, organization-scoped read (phase 12 §4.3): the dashboard
+ *  always calls it with the session bearer; an API key never reads audit logs
+ *  (the API answers 401). Scope is organization-wide — every project and both
+ *  environments of the addressed tenant (D12) — ordered ascending by UUIDv7
+ *  (D10) through the same cursor contract as every other list. Read-only: no
+ *  operation creates, edits or deletes an entry. */
+export function listAuditLogs(
+  accessToken: string,
+  organizationId: string,
+  query: ListAuditLogsQuery = {},
+): Promise<CursorPage<AuditLogEntry>> {
+  return apiFetch<CursorPage<AuditLogEntry>>(
+    `/organizations/${organizationId}/logs/audit${listQuery({ ...query })}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}

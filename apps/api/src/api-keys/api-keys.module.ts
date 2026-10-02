@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { AuditLoggingCoreModule } from '../audit-logging/audit-logging-core.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { ApiKeyAuthGuard } from './api-key-auth.guard';
 import { ApiKeysController } from './api-keys.controller';
@@ -14,9 +15,12 @@ import { ApiKeysService } from './api-keys.service';
  * The management routes (`/projects/{project_id}/api-keys`) reuse the
  * project-scoped RBAC guard from the projects module; the `ApiKeyAuthGuard`
  * ships with no HTTP consumer until Phase 6 but is exported for those routes.
+ *
+ * AuditLoggingCoreModule (phase 12 §5.5) supplies the audit capture port:
+ * key creation/revocation and their entries share one transaction (§6.2, D7).
  */
 @Module({
-  imports: [ProjectsModule],
+  imports: [ProjectsModule, AuditLoggingCoreModule],
   controllers: [ApiKeysController],
   providers: [ApiKeysService, ApiKeyAuthGuard],
   exports: [ApiKeysService, ApiKeyAuthGuard],

@@ -5,6 +5,7 @@ import { LoggerModule } from 'nestjs-pino';
 
 import { AuthModule } from './auth/auth.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
+import { AuditLoggingModule } from './audit-logging/audit-logging.module';
 import { ApiExceptionFilter } from './common/errors/api-exception.filter';
 import { CustomersModule } from './customers/customers.module';
 import loadConfiguration from './config/configuration';
@@ -25,9 +26,9 @@ import { WebhooksModule } from './webhooks/webhooks.module';
  * Root application module (Phase 8). Wires the base cross-cutting
  * infrastructure (configuration, structured logging, Prisma, Redis, health
  * checks, the global error envelope, idempotency) together with the auth,
- * organizations, projects, api-keys, customers, payments, refunds, webhooks
- * and request-logging domain modules. Audit logs and rate limiting arrive with
- * their owning phases (12–13).
+ * organizations, projects, api-keys, customers, payments, refunds, webhooks,
+ * request-logging and audit-logging domain modules. Rate limiting arrives with
+ * its owning phase (13).
  *
  * The webhook **worker** is deliberately absent (D14): it is a separate process
  * with its own entrypoint (`worker.ts`) so the API only enqueues. `WebhooksModule`
@@ -63,6 +64,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     ProjectScopeModule,
     WebhooksModule,
     RequestLoggingModule,
+    AuditLoggingModule,
   ],
   providers: [
     {

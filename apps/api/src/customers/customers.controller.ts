@@ -9,11 +9,13 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import type { CursorPage } from '../organizations/cursor';
+import { resolveRequestId } from '../request-id/request-id';
 import { CustomersAccessGuard } from './customers-access.guard';
 import { CustomersScope, type CustomersScope as CustomersScopeValue } from './customers-scope';
 import { CustomersService, type CustomerResponse } from './customers.service';
@@ -54,8 +56,9 @@ export class CustomersController {
   create(
     @CustomersScope() scope: CustomersScopeValue,
     @Body() dto: CustomerCreateDto,
+    @Req() request: { id?: unknown },
   ): Promise<CustomerResponse> {
-    return this.customers.create(scope, dto);
+    return this.customers.create(scope, dto, resolveRequestId(request));
   }
 
   @Get(':customer_id')
@@ -75,8 +78,9 @@ export class CustomersController {
     @CustomersScope() scope: CustomersScopeValue,
     @Param('customer_id') customerId: string,
     @Body() dto: CustomerUpdateDto,
+    @Req() request: { id?: unknown },
   ): Promise<CustomerResponse> {
-    return this.customers.update(scope, customerId, dto);
+    return this.customers.update(scope, customerId, dto, resolveRequestId(request));
   }
 
   @Delete(':customer_id')
@@ -86,7 +90,8 @@ export class CustomersController {
   async remove(
     @CustomersScope() scope: CustomersScopeValue,
     @Param('customer_id') customerId: string,
+    @Req() request: { id?: unknown },
   ): Promise<void> {
-    await this.customers.delete(scope, customerId);
+    await this.customers.delete(scope, customerId, resolveRequestId(request));
   }
 }

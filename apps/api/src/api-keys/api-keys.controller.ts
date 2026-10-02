@@ -8,14 +8,18 @@ import {
   Param,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 
+import { CurrentUser, type AuthUser } from '../auth/current-user';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import { userActor } from '../audit-logging/audit-scope';
 import { ListQueryDto, type CursorPage } from '../organizations/cursor';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { ProjectRbacGuard } from '../projects/project-rbac.guard';
 import { CurrentProject, type ResolvedProject } from '../projects/request-project';
+import { resolveRequestId } from '../request-id/request-id';
 import {
   ApiKeysService,
   type ApiKeyCreatedResponse,
@@ -52,9 +56,15 @@ export class ApiKeysController {
   @RequireCapability({ capability: 'apiKeys.create' })
   create(
     @CurrentProject() project: ResolvedProject,
+    @CurrentUser() user: AuthUser,
     @Body() dto: ApiKeyCreateDto,
+    @Req() request: { id?: unknown },
   ): Promise<ApiKeyCreatedResponse> {
-    return this.apiKeys.create(project.project_id, dto.environment);
+    // Session-only route, so the audit actor is always the acting user (§5.5).
+    return this.apiKeys.create(project, dto.environment, {
+      actor: userActor(user.id),
+      request_id: resolveRequestId(request),
+    });
   }
 
   @Delete(':api_key_id')
@@ -63,8 +73,13 @@ export class ApiKeysController {
   @RequireCapability({ capability: 'apiKeys.revoke' })
   async revoke(
     @CurrentProject() project: ResolvedProject,
+    @CurrentUser() user: AuthUser,
     @Param('api_key_id') apiKeyId: string,
+    @Req() request: { id?: unknown },
   ): Promise<void> {
-    await this.apiKeys.revoke(project.project_id, apiKeyId);
+    await this.apiKeys.revoke(project, apiKeyId, {
+      actor: userActor(user.id),
+      request_id: resolveRequestId(request),
+    });
   }
 }

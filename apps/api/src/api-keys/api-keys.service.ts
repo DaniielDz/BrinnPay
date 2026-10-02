@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
+import { AUDIT_LOG_PORT, type AuditLogPort } from '../audit-logging/audit-log.port';
+import type { AuditRequestContext } from '../audit-logging/audit-scope';
 import { Prisma } from '../../generated/prisma/client';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
@@ -11,6 +13,7 @@ import {
   type CursorPage,
 } from '../organizations/cursor';
 import { isUuidLike } from '../projects/projects.service';
+import type { ResolvedProject } from '../projects/request-project';
 import type { Environment } from '../projects/environment';
 import { PrismaService } from '../prisma/prisma.service';
 import { generateApiKey, hashApiKey } from './api-key-crypto';
@@ -49,7 +52,10 @@ function isPrismaError(error: unknown, code: string): boolean {
  */
 @Injectable()
 export class ApiKeysService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
+  ) {}
 
   /**
    * List (§4.2, D5): project-wide — both environments' keys, because the
@@ -79,20 +85,40 @@ export class ApiKeysService {
    * in the response (`ApiKeyCreated.key` appears nowhere else). Multiple
    * active keys per project environment are permitted (required for rotation,
    * D1/D5); global hash uniqueness guards against collisions at the DB layer.
+   *
+   * Phase 12 §5.5/§6.2: the key row and its `api_key.created` entry are
+   * written in one transaction (D7). The entry carries only the allowlisted
+   * metadata — never the plaintext or its hash (§4.2 rule 7).
    */
-  async create(projectId: string, environment: Environment): Promise<ApiKeyCreatedResponse> {
+  async create(
+    project: ResolvedProject,
+    environment: Environment,
+    context: AuditRequestContext,
+  ): Promise<ApiKeyCreatedResponse> {
     const key = generateApiKey(environment);
     const keyHash = hashApiKey(key);
 
     const now = new Date();
-    const row = await this.prisma.apiKey.create({
-      data: {
-        id: uuidv7(),
-        projectId,
+    const row = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.apiKey.create({
+        data: {
+          id: uuidv7(),
+          projectId: project.project_id,
+          environment,
+          keyHash,
+          createdAt: now,
+        },
+      });
+      await this.audit.record(tx, {
+        action: 'api_key.created',
+        organization_id: project.organization_id,
+        actor: context.actor,
+        project_id: project.project_id,
         environment,
-        keyHash,
-        createdAt: now,
-      },
+        api_key_id: created.id,
+        request_id: context.request_id,
+      });
+      return created;
     });
 
     return {
@@ -107,16 +133,24 @@ export class ApiKeysService {
   /**
    * Revoke (§4.2): sets `revoked_at`, effective immediately for lookup.
    * Idempotent for already-revoked keys (204 no-op, mirroring the phase 4
-   * cancellation pattern); a non-existent, malformed, or cross-project key id
-   * → 404 (`NOT_FOUND`, no disclosure).
+   * cancellation pattern) — an already-revoked key changes no state and
+   * therefore records no entry (phase 12 §4.2 rule 1); a non-existent,
+   * malformed, or cross-project key id → 404 (`NOT_FOUND`, no disclosure).
+   *
+   * Phase 12 §5.5/§6.2: the revocation and its `api_key.revoked` entry share
+   * one transaction (D7).
    */
-  async revoke(projectId: string, apiKeyId: string): Promise<void> {
+  async revoke(
+    project: ResolvedProject,
+    apiKeyId: string,
+    context: AuditRequestContext,
+  ): Promise<void> {
     if (!isUuidLike(apiKeyId)) {
       throw API_KEY_NOT_FOUND();
     }
 
     const key = await this.prisma.apiKey.findUnique({ where: { id: apiKeyId } });
-    if (!key || key.projectId !== projectId) {
+    if (!key || key.projectId !== project.project_id) {
       // A key outside the addressed project is indistinguishable from an
       // unknown one (no cross-project disclosure).
       throw API_KEY_NOT_FOUND();
@@ -127,9 +161,20 @@ export class ApiKeysService {
     }
 
     try {
-      await this.prisma.apiKey.update({
-        where: { id: key.id },
-        data: { revokedAt: new Date() },
+      await this.prisma.$transaction(async (tx) => {
+        await tx.apiKey.update({
+          where: { id: key.id },
+          data: { revokedAt: new Date() },
+        });
+        await this.audit.record(tx, {
+          action: 'api_key.revoked',
+          organization_id: project.organization_id,
+          actor: context.actor,
+          project_id: project.project_id,
+          environment: key.environment as Environment,
+          api_key_id: key.id,
+          request_id: context.request_id,
+        });
       });
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {

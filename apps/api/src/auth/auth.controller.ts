@@ -15,6 +15,7 @@ import type { Response } from 'express';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
 import type { BrinnPayConfig } from '../config/configuration';
+import { resolveRequestId } from '../request-id/request-id';
 import { AuthService } from './auth.service';
 import { clearRefreshCookie, refreshCookieSpec, setRefreshCookie } from './cookie';
 import { CurrentUser, type AuthenticatedRequest, type PublicUser } from './current-user';
@@ -47,9 +48,10 @@ export class AuthController {
   @AuthRateLimit('session-creation')
   async register(
     @Body() dto: RegisterDto,
+    @Req() req: { id?: unknown },
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthSessionPayload> {
-    const session = await this.auth.register(dto);
+    const session = await this.auth.register(dto, resolveRequestId(req));
     setRefreshCookie(res, this.cookies, session.refreshToken);
     return {
       access_token: session.accessToken,
@@ -64,9 +66,10 @@ export class AuthController {
   @AuthRateLimit('session-creation')
   async login(
     @Body() dto: LoginDto,
+    @Req() req: { id?: unknown },
     @Res({ passthrough: true }) res: Response,
   ): Promise<AuthSessionPayload> {
-    const session = await this.auth.login(dto);
+    const session = await this.auth.login(dto, resolveRequestId(req));
     setRefreshCookie(res, this.cookies, session.refreshToken);
     return {
       access_token: session.accessToken,
@@ -113,7 +116,10 @@ export class AuthController {
   ): Promise<void> {
     const token = this.readRefreshToken(req);
     if (token) {
-      await this.auth.logout(token);
+      // The request id is read from the same ingress-assigned carrier every
+      // other handler uses; the cast is type-level only (`id` lives behind
+      // `AuthenticatedRequest`'s index signature).
+      await this.auth.logout(token, resolveRequestId(req as { id?: unknown }));
     }
     // Idempotent (D9): the cookie is always cleared and 204 returned whether
     // or not a valid session was present.

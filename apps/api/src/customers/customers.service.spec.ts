@@ -12,12 +12,14 @@ function knownError(code: string): Prisma.PrismaClientKnownRequestError {
 
 const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
 const CUSTOMER_ID = '0192f2a0-0000-7000-8000-00000000000c';
+const USER_ID = '0192f2a0-0000-7000-8000-00000000000d';
 
 function sessionScope(projectId: string = PROJECT_ID): CustomersScope {
   return {
     mode: 'session',
     project: { project_id: projectId, organization_id: 'org-1' },
     project_id: projectId,
+    user_id: USER_ID,
   };
 }
 
@@ -57,14 +59,24 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
   let prisma: {
     customer: { findMany: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
     payment: { count: jest.Mock };
+    $transaction: jest.Mock;
   };
+  let audit: { record: jest.Mock; captureAuth: jest.Mock };
 
   beforeEach(() => {
     prisma = {
       customer: { findMany: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
       payment: { count: jest.fn() },
+      // Mutations and their audit entries share one transaction (phase 12 §6.2);
+      // the double hands the callback the same client so assertions keep
+      // inspecting the model mocks directly.
+      $transaction: jest.fn(),
     };
-    service = new CustomersService(prisma as unknown as PrismaService);
+    prisma.$transaction.mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    audit = { record: jest.fn(async () => undefined), captureAuth: jest.fn() };
+    service = new CustomersService(prisma as unknown as PrismaService, audit as never);
   });
 
   describe('list (§4.2, D2)', () => {
@@ -204,6 +216,20 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
       );
       expect(result.email).toBe('ada@example.com');
       expect(result.metadata).toEqual({});
+      // Phase 12 §5.5: the entry shares the creation transaction and takes its
+      // organization and actor from the guard-resolved scope (never the body).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'customer.created',
+        organization_id: 'org-1',
+        actor: { type: 'user', id: USER_ID },
+        project_id: PROJECT_ID,
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
+      // The customer email is data, not audit context (D13/§9).
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain('ada@example.com');
     });
 
     it('api-key mode: rejects a body environment that does not match the key (422)', async () => {
@@ -229,6 +255,14 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
       const result = await service.create(apiKeyScope('live'), { environment: 'live', email: 'a@b.co' });
 
       expect(result.environment).toBe('live');
+      // API-key mode: the key is the actor — never a user id (§5.6 rule 3).
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'customer.created',
+        organization_id: 'org-1',
+        actor: { type: 'api_key', id: 'key-1' },
+        environment: 'live',
+        customer_id: CUSTOMER_ID,
+      });
     });
 
     it('rejects blank or over-long names with VALIDATION_ERROR before writing', async () => {
@@ -316,6 +350,19 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
           }),
         }),
       );
+      // Phase 12 §5.5: one `customer.updated` entry in the same transaction,
+      // with neither the old nor the new value recorded (D13).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'customer.updated',
+        organization_id: 'org-1',
+        actor: { type: 'user', id: USER_ID },
+        project_id: PROJECT_ID,
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain('grace@example.com');
     });
 
     it('replaces the metadata map wholesale (D6) and only touches updated_at', async () => {
@@ -346,6 +393,8 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
 
       expect(prisma.customer.update).not.toHaveBeenCalled();
       expect(result.name).toBe('Ada');
+      // Nothing was written, so nothing is recorded (§4.2 rule 6).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('a patch with no fields is a no-op returning the current state', async () => {
@@ -397,6 +446,18 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
         where: { customerId: CUSTOMER_ID },
       });
       expect(prisma.customer.delete).toHaveBeenCalledWith({ where: { id: CUSTOMER_ID } });
+      // Phase 12 §5.5/D8: the entry keeps a plain-id reference to the row that
+      // no longer exists — recorded inside the same transaction.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'customer.deleted',
+        organization_id: 'org-1',
+        actor: { type: 'user', id: USER_ID },
+        project_id: PROJECT_ID,
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
     });
 
     it('returns 422 BUSINESS_RULE_VIOLATION when the customer has linked payments (D4)', async () => {
@@ -408,6 +469,8 @@ describe('CustomersService (phase 6 §4.2, D1/D2/D3/D6/D7)', () => {
         status: 422,
       });
       expect(prisma.customer.delete).not.toHaveBeenCalled();
+      // A rejected mutation never reaches the write path — no entry (AC4).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('maps the P2003 FK backstop to 422 when a payment races in before the delete (D4)', async () => {
