@@ -191,18 +191,32 @@ export class WebhookQueueService implements OnModuleInit, OnModuleDestroy {
     ];
 
     for (const scheduler of schedulers) {
-      try {
-        await this.queue.upsertJobScheduler(
-          scheduler.name,
-          { every: Math.max(1000, scheduler.every) },
-          { name: scheduler.name, data: {} },
-        );
-      } catch (error) {
-        this.logger.warn(
-          { job: scheduler.name, reason: messageOf(error) },
-          'Could not register a scheduled webhook job; the worker will retry on restart.',
-        );
-      }
+      await this.ensureScheduler(scheduler.name, scheduler.every);
+    }
+  }
+
+  /**
+   * Registers one periodic job on this queue. Idempotent (see
+   * {@link ensureRepeatables}) and best-effort: a Redis failure is logged and
+   * the next worker start retries.
+   *
+   * Deliberately generic over the job name: the queue is the process's single
+   * timer (ADR-0013) and carries work that is not webhook-domain work — the
+   * request-log retention pass (phase 11 §14) schedules itself here too, so it
+   * reuses Phase 10's maintenance instead of introducing a second job runner.
+   */
+  async ensureScheduler(name: string, every: number): Promise<void> {
+    try {
+      await this.queue.upsertJobScheduler(
+        name,
+        { every: Math.max(1000, every) },
+        { name, data: {} },
+      );
+    } catch (error) {
+      this.logger.warn(
+        { job: name, reason: messageOf(error) },
+        'Could not register a scheduled webhook job; the worker will retry on restart.',
+      );
     }
   }
 

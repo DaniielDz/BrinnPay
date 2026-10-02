@@ -40,6 +40,7 @@ export const CAPABILITIES = {
   WEBHOOKS_UPDATE: 'webhooks.update',
   WEBHOOKS_DELETE: 'webhooks.delete',
   WEBHOOKS_REPLAY: 'webhooks.replay',
+  LOGS_READ: 'logs.read',
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -96,6 +97,12 @@ const MATRIX: Record<Capability, readonly Role[]> = {
   [CAPABILITIES.WEBHOOKS_UPDATE]: ['owner', 'admin'],
   [CAPABILITIES.WEBHOOKS_DELETE]: ['owner', 'admin'],
   [CAPABILITIES.WEBHOOKS_REPLAY]: ['owner', 'admin'],
+  // Phase 11 matrix (§4.4, D2): request logs are metadata only — no bodies, no
+  // secrets (§4.2 rule 4) — so reading them follows the read-for-every-role
+  // pattern of Phases 5–10. The owner/admin-only alternative (`invitations.read`
+  // precedent) was considered and rejected: this is a routine debugging surface.
+  // The route is session-only, so API keys never reach capability evaluation.
+  [CAPABILITIES.LOGS_READ]: ['owner', 'admin', 'member', 'viewer'],
 };
 
 export function isRole(value: string): value is Role {

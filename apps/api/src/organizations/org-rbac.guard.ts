@@ -100,6 +100,11 @@ export class OrgRbacGuard implements CanActivate {
     }
     const role = membership.role as Role;
 
+    // Attached before the capability check so a 403 still records the scope
+    // resolved to that point (phase 11 §4.2 rule 5). Authorization is unchanged:
+    // the handler never runs on either path.
+    request.organizationMembership = toResolvedMembership(membership);
+
     const selfTargetId = requirement.options?.allowSelf
       ? request.params?.user_id
       : undefined;
@@ -109,7 +114,6 @@ export class OrgRbacGuard implements CanActivate {
       throw new ApiError(ErrorCode.FORBIDDEN, 'Insufficient permissions', 403);
     }
 
-    request.organizationMembership = toResolvedMembership(membership);
     return true;
   }
 

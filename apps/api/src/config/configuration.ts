@@ -91,6 +91,17 @@ export interface BrinnPayConfig {
       denylist: readonly string[];
     };
   };
+  /**
+   * Request logging (phase 11 D5). Records are observability data whose loss on
+   * a failed write is accepted (D3), so this section carries only the retention
+   * window and the cleanup cadence — no endpoint thresholds or sampling rules.
+   */
+  requestLogging: {
+    /** How long a persisted request log row survives, in days (D5). */
+    retentionDays: number;
+    /** How often the retention cleanup pass runs, in ms (D5). */
+    cleanupIntervalMs: number;
+  };
 }
 
 const DEFAULT_DATABASE_URL = 'postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public';
@@ -135,6 +146,19 @@ const DEFAULT_WEBHOOK_FAILED_JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 da
 const DEFAULT_WEBHOOK_RETAINED_FAILED_JOBS = 1_000;
 const DEFAULT_WEBHOOK_ADVANCEMENT_SWEEP_INTERVAL_MS = 5_000;
 const DEFAULT_WEBHOOK_CLEANUP_INTERVAL_MS = 3_600_000;
+
+// Phase 11 request-log retention (D5): aligned with webhook event retention
+// (phase 10 D9) so an operator configures one window for both observability
+// stores. The cleanup interval is separate because the request-log pass runs on
+// its own schedule, not the webhook sweep's.
+const DEFAULT_REQUEST_LOG_RETENTION_DAYS = 30;
+const DEFAULT_REQUEST_LOG_CLEANUP_INTERVAL_MS = 3_600_000;
+// Ceilings on the two knobs: an unrealistic value must fail at boot instead of
+// silently disabling cleanup. An out-of-range cutoff date makes the deletion
+// query throw on every pass, which is logged and skipped — retention would then
+// never delete anything while looking configured.
+const MAX_REQUEST_LOG_RETENTION_DAYS = 3650;
+const MAX_REQUEST_LOG_CLEANUP_INTERVAL_MS = 86_400_000;
 
 /**
  * Ceiling on the retry ladder (D5). The ladder tops out at an hour of backoff
@@ -406,6 +430,20 @@ export function loadConfiguration(): BrinnPayConfig {
         allowlist: parseHostList(process.env.WEBHOOK_DESTINATION_ALLOWLIST),
         denylist: parseHostList(process.env.WEBHOOK_DESTINATION_DENYLIST),
       },
+    },
+    requestLogging: {
+      retentionDays: parseBoundedInt(
+        process.env.REQUEST_LOG_RETENTION_DAYS,
+        DEFAULT_REQUEST_LOG_RETENTION_DAYS,
+        MAX_REQUEST_LOG_RETENTION_DAYS,
+        'REQUEST_LOG_RETENTION_DAYS',
+      ),
+      cleanupIntervalMs: parseBoundedInt(
+        process.env.REQUEST_LOG_CLEANUP_INTERVAL_MS,
+        DEFAULT_REQUEST_LOG_CLEANUP_INTERVAL_MS,
+        MAX_REQUEST_LOG_CLEANUP_INTERVAL_MS,
+        'REQUEST_LOG_CLEANUP_INTERVAL_MS',
+      ),
     },
   };
 }

@@ -35,6 +35,7 @@ model User {
 
   refreshSessions RefreshSession[]
   memberships     OrganizationMember[]
+  requestLogs     RequestLog[]
 
   @@map("users")
 }
@@ -62,6 +63,7 @@ model Organization {
   members     OrganizationMember[]
   invitations Invitation[]
   projects    Project[]
+  requestLogs RequestLog[]
 
   @@map("organizations")
 }
@@ -124,6 +126,7 @@ model Project {
   idempotencyRecords IdempotencyRecord[]
   webhookEndpoints   WebhookEndpoint[]
   webhookEvents      WebhookEvent[]
+  requestLogs        RequestLog[]
 
   @@index([organizationId])
   @@map("projects")
@@ -315,8 +318,54 @@ model ApiKey {
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  requestLogs RequestLog[]
+
   @@index([projectId])
   @@map("api_keys")
+}
+
+// Phase 11 (ADR-0011): request logs. `request_logs` is the durable, API-wide
+// projection of one request/response (phase 11 §5.1): metadata allowlist only —
+// the table has no column capable of holding a body, a header, a query string or
+// a secret, so absence is the control (§4.2 rule 4, D6). `request_id` is the
+// server-assigned ingress correlation id (phase 1 §7.7); every other column is
+// nullable scope except `method`/`path`/`status_code`/`created_at`, which every
+// record carries.
+//
+// Tenant lifecycle: project and organization deletions cascade their rows so no
+// orphaned tenant data remains queryable; `user_id`/`api_key_id` are
+// `ON DELETE SET NULL` because a user or a soft-revoked key must never take the
+// surrounding log history with it (keys are only hard-removed with their
+// project). Records with an all-null tenant scope (public/auth traffic) live
+// until retention expiry only.
+//
+// Indexes serve the project-scoped cursor scan and the D1 environment filter
+// `(project_id, environment, id)`, the D8 exact `request_id` lookup, and the
+// retention cutoff scan on `created_at`.
+model RequestLog {
+  id             String   @id @db.Uuid
+  requestId      String   @map("request_id") @db.VarChar(64)
+  projectId      String?  @map("project_id") @db.Uuid
+  organizationId String?  @map("organization_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  apiKeyId       String?  @map("api_key_id") @db.Uuid
+  environment    String?  @db.VarChar(20)
+  method         String   @db.VarChar(10)
+  path           String   @db.VarChar(2048)
+  statusCode     Int      @map("status_code")
+  durationMs     Int?     @map("duration_ms")
+  createdAt      DateTime @map("created_at") @db.Timestamptz(3)
+
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  apiKey       ApiKey?       @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, id])
+  @@index([projectId, environment, id])
+  @@index([requestId])
+  @@index([createdAt])
+  @@map("request_logs")
 }
 
 model OrganizationMember {

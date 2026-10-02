@@ -102,19 +102,38 @@ describe('ProjectRbacGuard (phase 5 §4.1, D2/D3)', () => {
   it('returns 403 for a member without the required capability (§4.3, D3)', async () => {
     prisma.project.findUnique.mockResolvedValue(PROJECT_ROW);
     prisma.organizationMember.findUnique.mockResolvedValue({ ...MEMBER_ROW, role: 'member' });
+    const request = {
+      authUser: { id: USER_ID, email: 'dev@example.com', name: null },
+      params: { project_id: PROJECT_ID },
+    } as { project?: unknown; organizationMembership?: unknown };
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => request }),
+      getHandler: () => decoratedHandler('projects.delete'),
+    } as unknown as ExecutionContext;
 
-    await expect(
-      guard.canActivate(contextFor(decoratedHandler('projects.delete'), { project_id: PROJECT_ID })),
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    // Scope to the point of failure: a 403 still carries the resolved project.
+    expect(request.project).toMatchObject({ project_id: PROJECT_ID, organization_id: ORG_ID });
   });
 
   it('returns 404 for a non-member of the owning organization (D2 — no disclosure)', async () => {
     prisma.project.findUnique.mockResolvedValue(PROJECT_ROW);
     prisma.organizationMember.findUnique.mockResolvedValue(null);
+    const request = {
+      authUser: { id: USER_ID, email: 'dev@example.com', name: null },
+      params: { project_id: PROJECT_ID },
+    } as { project?: unknown; organizationMembership?: unknown };
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => request }),
+      getHandler: () => decoratedHandler('projects.read'),
+    } as unknown as ExecutionContext;
 
-    await expect(
-      guard.canActivate(contextFor(decoratedHandler('projects.read'), { project_id: PROJECT_ID })),
-    ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    await expect(guard.canActivate(ctx)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    // Phase 11 §4.2 rule 5: a non-member 404 is indistinguishable from an
+    // unknown project — no tenant scope is attached, so the request log stays
+    // null-scoped and an outsider can never write into a foreign tenant's log.
+    expect(request.project).toBeUndefined();
+    expect(request.organizationMembership).toBeUndefined();
   });
 
   it('returns 404 for an unknown project without checking membership', async () => {

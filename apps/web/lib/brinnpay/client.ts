@@ -864,3 +864,51 @@ export function replayWebhookEvent(
     { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` } },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Request logs (phase 11 §4.3/§7)
+// ---------------------------------------------------------------------------
+
+/** `RequestLog` as contracted (phase 11 §4.3): request metadata only. No
+ *  bodies, headers or query strings are ever stored (§14) or displayed, so
+ *  nothing here can carry authorization material. Scope columns are nullable —
+ *  an API-wide capability includes public/unauthenticated requests. The API is
+ *  the authority: session tokens only, retention-bound, project-scoped. */
+export interface RequestLog {
+  id: string;
+  request_id: string;
+  project_id: string | null;
+  organization_id: string | null;
+  user_id: string | null;
+  api_key_id: string | null;
+  /** `null` when the request carried no validated environment (D1). */
+  environment: Environment | null;
+  method: string;
+  path: string;
+  status_code: number;
+  /** Omitted when the response was never measured to completion. */
+  duration_ms?: number;
+  created_at: string;
+}
+
+/** D1: absent `environment` returns every record of the project (including
+ *  environment-less ones); present, it narrows to that environment. `request_id`
+ *  is an exact server-side lookup (D8) that answers an empty page rather than a
+ *  404. Neither filter can address another project's records. */
+export interface ListRequestLogsQuery {
+  environment?: Environment;
+  request_id?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export function listRequestLogs(
+  accessToken: string,
+  projectId: string,
+  query: ListRequestLogsQuery = {},
+): Promise<CursorPage<RequestLog>> {
+  return apiFetch<CursorPage<RequestLog>>(
+    `/projects/${projectId}/logs/requests${listQuery({ ...query })}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+}
