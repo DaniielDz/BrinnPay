@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   assertValidCapture,
   buildAuditData,
+  isAuditActorType,
   newAuditEntryId,
   resourceIdOf,
   resourceTypeFor,
@@ -166,11 +167,18 @@ export class AuditLoggingService implements AuditLogPort {
     // it cannot be attributed per D5, so it is reported and skipped rather
     // than recorded under a wrong actor.
     if (isPaymentTransition(capture)) {
+      // The origin row is matched on the full project scope, not the resource id
+      // alone: `resource_id` is a payment id whose uniqueness is an application
+      // invariant, never a security boundary (§9 — opaque ids are not a
+      // control). If the invariant were ever violated, an entry carrying
+      // another tenant's organization/actor would land in this tenant's trail.
       const origin = await tx.auditLogEntry.findFirst({
         where: {
           action: 'payment.created',
           resourceType: 'payment',
           resourceId: capture.payment_id,
+          projectId: capture.project_id,
+          environment: capture.environment,
         },
         orderBy: { id: 'asc' },
         select: { organizationId: true, actorType: true, actorId: true },
@@ -186,12 +194,26 @@ export class AuditLoggingService implements AuditLogPort {
         );
         return [];
       }
+      // The origin row is data, not a trusted constant: an actor type outside
+      // the catalog enum is validated here rather than cast, and an
+      // unresolvable attribution is skipped instead of guessed.
+      if (!isAuditActorType(origin.actorType)) {
+        this.logger.warn(
+          {
+            action: capture.action,
+            organization_id: null,
+            error_class: 'UnknownOriginActorType',
+          },
+          'payment.created entry carries an unknown actor type; skipped.',
+        );
+        return [];
+      }
       return [
         {
           ...head,
           id: newAuditEntryId(),
           organization_id: origin.organizationId,
-          actor_type: origin.actorType as AuditActorType,
+          actor_type: origin.actorType,
           actor_id: origin.actorId,
           project_id: capture.project_id,
           environment: capture.environment,

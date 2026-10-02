@@ -146,13 +146,17 @@ describe('AuditLoggingService (phase 12 §4.1/§5.6/§6.2)', () => {
       currency: 'usd',
     });
 
-    // The origin is read from the `payment.created` entry of the same payment.
+    // The origin is read from the `payment.created` entry of the same payment,
+    // scoped to the transition's project and environment: id uniqueness is an
+    // application invariant, never a tenant boundary (F1).
     expect(tx.auditLogEntry.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
           action: 'payment.created',
           resourceType: 'payment',
           resourceId: PAYMENT_ID,
+          projectId: PROJECT_ID,
+          environment: 'test',
         },
       }),
     );
@@ -187,6 +191,32 @@ describe('AuditLoggingService (phase 12 §4.1/§5.6/§6.2)', () => {
       expect.objectContaining({ action: 'payment.succeeded', error_class: 'MissingPaymentCreatedEntry' }),
       expect.any(String),
     );
+  });
+
+  it('background terminal transition: an unknown origin actor type is skipped, not cast (F1)', async () => {
+    tx.auditLogEntry.findFirst.mockResolvedValue({
+      organizationId: ORG_ID,
+      actorType: 'system',
+      actorId: null,
+    });
+
+    await service.record(tx as never, {
+      action: 'payment.failed',
+      project_id: PROJECT_ID,
+      environment: 'test',
+      payment_id: PAYMENT_ID,
+      amount: '10.00',
+      currency: 'usd',
+      failure_code: 'card_declined',
+    });
+
+    expect(inserts(tx)).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'payment.failed', error_class: 'UnknownOriginActorType' }),
+      expect.any(String),
+    );
+    // The log never carries the entry payload (§9).
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(ORG_ID);
   });
 
   // -------------------------------------------------------------------------
