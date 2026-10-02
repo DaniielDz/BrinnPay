@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '../../../../../../../components/auth/auth-provider';
 import {
@@ -66,6 +66,14 @@ export default function ProjectLogsAuditPage() {
    *  displayed (phase 11 §7). */
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  /** Mirror of `loadedFor` for the "load more" continuation.
+   *
+   *  `onLoadMore` is not an effect: its promise outlives a client-side route
+   *  change, and the `loadedFor` state it closes over is the value at click
+   *  time. A ref is the only way for the late page to ask which project's list
+   *  it is appending to — without it, a page fetched for the previous project
+   *  splices into the new project's entries (phase 11 §7 stale-state rule). */
+  const loadedForRef = useRef<string | null>(null);
 
   // Project resolution is keyed by project: a route change to another
   // project's page falls back to "resolving" on the first frame instead of
@@ -83,6 +91,9 @@ export default function ProjectLogsAuditPage() {
     if (!accessToken) return;
     let cancelled = false;
     setProjectView({ projectId, status: 'loading', project: null, message: null });
+    // The route change itself transfers list ownership: from here on, no
+    // page fetched for the previous project may be appended to this one (F3).
+    loadedForRef.current = null;
     void (async () => {
       try {
         const loaded = await retrieveProject(accessToken, projectId);
@@ -112,6 +123,9 @@ export default function ProjectLogsAuditPage() {
     setListLoading(true);
     setListError(null);
     setCopiedId(null);
+    // The previous project's list is no longer the one being extended: an
+    // in-flight "load more" for it must not append here (F3).
+    loadedForRef.current = null;
     void (async () => {
       try {
         const page: CursorPage<AuditLogEntry> = await listAuditLogs(
@@ -132,6 +146,7 @@ export default function ProjectLogsAuditPage() {
           setListLoading(false);
           // Both outcomes resolve the view for this project: an error must
           // reach the alert instead of being hidden behind the loading state.
+          loadedForRef.current = projectId;
           setLoadedFor(projectId);
         }
       }
@@ -145,17 +160,25 @@ export default function ProjectLogsAuditPage() {
     if (!accessToken || !project || !nextCursor || listLoading) return;
     setListLoading(true);
     setListError(null);
+    const requestedFor = projectId;
     try {
       const page = await listAuditLogs(accessToken, project.organization_id, {
         cursor: nextCursor,
       });
+      // A route change since the click invalidates this page: appending it
+      // would mix another organization's rows into the list on screen.
+      if (loadedForRef.current !== requestedFor) return;
       setEntries((current) => [...current, ...page.data]);
       setNextCursor(page.next_cursor);
       setHasMore(page.has_more);
     } catch (err) {
+      if (loadedForRef.current !== requestedFor) return;
       setListError(err instanceof Error ? err.message : 'Unable to load audit logs');
     } finally {
-      setListLoading(false);
+      // Only the request that still belongs to the displayed project may clear
+      // the loading flag; otherwise it would unlock the new project's button
+      // and re-enable a cursor this page no longer owns.
+      if (loadedForRef.current === requestedFor) setListLoading(false);
     }
   }
 

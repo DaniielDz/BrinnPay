@@ -121,6 +121,56 @@ describe('audit logs page (phase 12 §8)', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
   });
 
+  it('drops a page still in flight when the route changes to another project (F3)', async () => {
+    // "Load more" is not an effect: its promise outlives the route change, so
+    // the late page must not be appended to the new project's entries.
+    const { fetchMock } = stubAuditLogsApi({ pageSize: 2 });
+    const stalePage: { release: (() => void) | null } = { release: null };
+    const gatedFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('cursor=')) {
+        await new Promise<void>((resolve) => {
+          stalePage.release = resolve;
+        });
+      }
+      return fetchMock(input, init);
+    });
+    vi.stubGlobal('fetch', gatedFetch);
+
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    const { rerender } = render(
+      <AuthProvider>
+        <ProjectLogsAuditPage />
+      </AuthProvider>,
+    );
+    const table = await screen.findByRole('table', { name: 'Audit logs' });
+    expect(within(table).getAllByRole('row')).toHaveLength(3); // header + page 1
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(stalePage.release).not.toBeNull());
+
+    // Same component instance, different project, while page 2 is still in flight.
+    paramsMock.mockReturnValue({ projectId: 'proj-2' });
+    rerender(
+      <AuthProvider>
+        <ProjectLogsAuditPage />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(within(screen.getByRole('table', { name: 'Audit logs' })).getAllByRole('row')).toHaveLength(3),
+    );
+
+    // The stale page resolves only now: it must not splice into proj-2's list.
+    stalePage.release?.();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Audit logs' })).getAllByRole('row'),
+      ).toHaveLength(3),
+    );
+    expect(within(screen.getByRole('table', { name: 'Audit logs' })).queryByText('api_key.revoked')).toBeNull();
+    // The cursor belongs to proj-2's page 1, so "Load more" is still available.
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeInTheDocument();
+  });
+
   it('copies the request id for cross-reference into the request-log viewer', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
