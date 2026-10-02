@@ -130,7 +130,6 @@ export class CustomersAccessGuard implements CanActivate {
     if (!project) {
       this.notFound();
     }
-
     const membership = await this.prisma.organizationMember.findUnique({
       where: {
         organizationId_userId: { organizationId: project.organizationId, userId: request.authUser.id },
@@ -138,7 +137,10 @@ export class CustomersAccessGuard implements CanActivate {
     });
     if (!membership) {
       // Non-member: the project is indistinguishable from a non-existent one
-      // (phase 4 D1 applied to projects — D2).
+      // (phase 4 D1 applied to projects — D2). The project context is
+      // deliberately NOT attached, so the request log (phase 11 §4.2 rule 5)
+      // records a null scope — a non-member can never write rows into a
+      // foreign tenant's log.
       this.notFound();
     }
 
@@ -148,12 +150,16 @@ export class CustomersAccessGuard implements CanActivate {
     }
     const role = membership.role as Role;
 
+    // Attached after membership resolution so a 403 still carries the scope
+    // resolved to that point (phase 11 §4.2 rule 5) while non-member 404s stay
+    // null-scoped. Authorization is unchanged: the handler never runs either way.
+    request.project = toResolvedProject(project);
+    request.organizationMembership = toResolvedMembership(membership);
+
     if (!can(role, requirement.capability)) {
       throw new ApiError(ErrorCode.FORBIDDEN, 'Insufficient permissions', 403);
     }
 
-    request.organizationMembership = toResolvedMembership(membership);
-    request.project = toResolvedProject(project);
     return true;
   }
 

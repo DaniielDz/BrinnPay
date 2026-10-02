@@ -5,6 +5,7 @@ import helmet from 'helmet';
 
 import { createValidationPipe } from './common/validation/validation';
 import { requestIdMiddleware } from './request-id/request-id.middleware';
+import { API_GLOBAL_PREFIX } from './request-logging/request-log-record';
 
 /**
  * Applies the Phase 2/3 cross-cutting base to an application instance. Shared
@@ -31,7 +32,10 @@ export function configureApp(app: INestApplication, config: ConfigService): void
     credentials: true,
   });
 
-  app.setGlobalPrefix('api/v1', {
+  // The same constant decides which requests are persisted as request logs
+  // (phase 11 D7), so routing and recording can never disagree about what the
+  // API surface is.
+  app.setGlobalPrefix(API_GLOBAL_PREFIX, {
     exclude: ['health/live', 'health/ready'],
   });
 

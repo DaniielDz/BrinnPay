@@ -86,3 +86,70 @@ describe('webhook delivery configuration (phase 10 D5)', () => {
     expect(loadConfiguration().webhooks.secretEncryptionKey).toHaveLength(32);
   });
 });
+
+/**
+ * The request-log retention knobs (phase 11 D5). Exercised through the loader
+ * for the same reason as the delivery knobs above: these values decide when a
+ * row is destroyed by a background job, so a typo has to fail at boot rather
+ * than silently keeping records for a thousand days (or none).
+ */
+describe('request logging configuration (phase 11 D5)', () => {
+  const saved: Record<string, string | undefined> = {};
+  const KEYS = ['REQUEST_LOG_RETENTION_DAYS', 'REQUEST_LOG_CLEANUP_INTERVAL_MS', 'WEBHOOK_ENCRYPTION_KEY'];
+
+  beforeEach(() => {
+    for (const key of KEYS) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    // Required by `loadConfiguration` in every profile (see the cases above).
+    process.env.WEBHOOK_ENCRYPTION_KEY = Buffer.alloc(32, 0x2b).toString('base64');
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it('defaults to 30 days of retention with an hourly cleanup pass', () => {
+    const config = loadConfiguration();
+    expect(config.requestLogging.retentionDays).toBe(30);
+    expect(config.requestLogging.cleanupIntervalMs).toBe(3_600_000);
+  });
+
+  it('accepts explicit retention and cleanup cadence', () => {
+    process.env.REQUEST_LOG_RETENTION_DAYS = '7';
+    process.env.REQUEST_LOG_CLEANUP_INTERVAL_MS = '900000';
+    const config = loadConfiguration();
+    expect(config.requestLogging.retentionDays).toBe(7);
+    expect(config.requestLogging.cleanupIntervalMs).toBe(900_000);
+  });
+
+  it('rejects a non-positive or non-integer retention at boot', () => {
+    process.env.REQUEST_LOG_RETENTION_DAYS = '0';
+    expect(() => loadConfiguration()).toThrow(/REQUEST_LOG_RETENTION_DAYS must be a positive integer/);
+    process.env.REQUEST_LOG_RETENTION_DAYS = '1.5';
+    expect(() => loadConfiguration()).toThrow(/REQUEST_LOG_RETENTION_DAYS must be a positive integer/);
+  });
+
+  it('rejects a non-positive or non-integer cleanup interval at boot', () => {
+    process.env.REQUEST_LOG_CLEANUP_INTERVAL_MS = '-1';
+    expect(() => loadConfiguration()).toThrow(
+      /REQUEST_LOG_CLEANUP_INTERVAL_MS must be a positive integer/,
+    );
+  });
+
+  it('rejects an out-of-range retention or cleanup interval at boot', () => {
+    // A value beyond the ceiling would compute an invalid cutoff date and
+    // silently disable cleanup, so it must fail loudly instead (F2).
+    process.env.REQUEST_LOG_RETENTION_DAYS = '999999999';
+    expect(() => loadConfiguration()).toThrow(/REQUEST_LOG_RETENTION_DAYS must be at most 3650/);
+    delete process.env.REQUEST_LOG_RETENTION_DAYS;
+    process.env.REQUEST_LOG_CLEANUP_INTERVAL_MS = '999999999999';
+    expect(() => loadConfiguration()).toThrow(
+      /REQUEST_LOG_CLEANUP_INTERVAL_MS must be at most 86400000/,
+    );
+  });
+});

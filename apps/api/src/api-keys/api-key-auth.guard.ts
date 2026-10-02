@@ -38,7 +38,13 @@ export class ApiKeyAuthGuard implements CanActivate {
     }
 
     const keyHash = hashApiKey(key);
-    const row = await this.prisma.apiKey.findUnique({ where: { keyHash } });
+    // The owning organization is resolved in the same query (one round trip)
+    // so an API-key-mode request record can carry an organization scope
+    // (phase 11 §4.2 rule 5) without a second lookup.
+    const row = await this.prisma.apiKey.findUnique({
+      where: { keyHash },
+      include: { project: { select: { organizationId: true } } },
+    });
 
     if (!row || row.revokedAt) {
       // Revocation is effective immediately; unknown and revoked keys are

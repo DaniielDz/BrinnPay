@@ -17,6 +17,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { RedisModule } from './redis/redis.module';
 import { RefundsModule } from './refunds/refunds.module';
+import { RequestLoggingModule } from './request-logging/request-logging.module';
 import { ProjectScopeModule } from './common/project-scope/project-scope.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 
@@ -24,9 +25,9 @@ import { WebhooksModule } from './webhooks/webhooks.module';
  * Root application module (Phase 8). Wires the base cross-cutting
  * infrastructure (configuration, structured logging, Prisma, Redis, health
  * checks, the global error envelope, idempotency) together with the auth,
- * organizations, projects, api-keys, customers, payments, refunds, and webhooks
- * domain modules. Request logs, audit logs, and rate limiting arrive with their
- * owning phases (11–13).
+ * organizations, projects, api-keys, customers, payments, refunds, webhooks
+ * and request-logging domain modules. Audit logs and rate limiting arrive with
+ * their owning phases (12–13).
  *
  * The webhook **worker** is deliberately absent (D14): it is a separate process
  * with its own entrypoint (`worker.ts`) so the API only enqueues. `WebhooksModule`
@@ -61,6 +62,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     RefundsModule,
     ProjectScopeModule,
     WebhooksModule,
+    RequestLoggingModule,
   ],
   providers: [
     {

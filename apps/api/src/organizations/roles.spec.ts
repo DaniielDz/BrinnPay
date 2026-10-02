@@ -112,6 +112,15 @@ describe('roles / permission matrix (phase 4 §4.3, D2/D3)', () => {
     expect(can('viewer', 'refunds.create')).toBe(false);
   });
 
+  it('phase 11: logs.read is granted to every member role (D2, §4.4)', () => {
+    // Request logs hold metadata only — no bodies, no secrets (§4.2 rule 4) —
+    // so they follow the read-for-every-role pattern. The rejected owner/admin
+    // alternative lives in D2; this test is what would fail if it were chosen.
+    for (const role of ['owner', 'admin', 'member', 'viewer'] as const) {
+      expect(can(role, 'logs.read')).toBe(true);
+    }
+  });
+
   it('isDownward reflects the strict owner > admin > member > viewer ordering', () => {
     expect(isDownward('owner', 'admin')).toBe(true);
     expect(isDownward('admin', 'member')).toBe(true);

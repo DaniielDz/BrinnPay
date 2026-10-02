@@ -2,6 +2,10 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 
+import {
+  REQUEST_LOG_CLEANUP_JOB,
+  RequestLogStoreService,
+} from '../request-logging/request-log-store.service';
 import { WebhookDeliveryService } from './webhook-delivery.service';
 import { WebhookMaintenanceService } from './webhook-maintenance.service';
 import {
@@ -24,6 +28,12 @@ import {
  * * *never* thrown: they are recorded on the delivery row and re-queued with
  * backoff, so a permanently broken destination cannot exhaust BullMQ's retry
  * budget or spin the worker.
+ *
+ * The queue is this process's single timer (ADR-0013), so it also carries the
+ * phase 11 request-log retention pass: one consumer, one `switch`, no second
+ * worker competing for the same jobs. There must be exactly **one** processor
+ * for this queue name — a second one would split the delivery jobs between two
+ * consumers and silently drop the passes the other one does not understand.
  */
 @Processor(WEBHOOK_QUEUE_NAME)
 export class WebhookProcessor extends WorkerHost {
@@ -32,6 +42,7 @@ export class WebhookProcessor extends WorkerHost {
   constructor(
     private readonly delivery: WebhookDeliveryService,
     private readonly maintenance: WebhookMaintenanceService,
+    private readonly requestLogs: RequestLogStoreService,
   ) {
     super();
   }
@@ -46,6 +57,8 @@ export class WebhookProcessor extends WorkerHost {
         return this.advancePayments();
       case WEBHOOK_JOBS.CLEANUP:
         return this.cleanup();
+      case REQUEST_LOG_CLEANUP_JOB:
+        return this.cleanupRequestLogs();
       default:
         // A job name this build does not understand is a deployment mismatch, not
         // a destination problem: logging it and completing keeps the queue moving.
@@ -82,6 +95,16 @@ export class WebhookProcessor extends WorkerHost {
 
   private async cleanup(): Promise<number> {
     return this.maintenance.cleanupExpired();
+  }
+
+  /**
+   * Phase 11 D5: drops request-log rows past the retention window. The pass's
+   * own log line is emitted by the store (it knows the cutoff); here the count
+   * is only returned as the job's result. Retention never touches readiness —
+   * it runs in this worker, off the request path entirely.
+   */
+  private async cleanupRequestLogs(): Promise<number> {
+    return this.requestLogs.cleanupExpired();
   }
 }
 

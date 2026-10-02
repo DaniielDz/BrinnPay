@@ -23,6 +23,9 @@ const ACTIVE_ROW = {
   keyHash: 'hash',
   revokedAt: null,
   createdAt: new Date(),
+  // Resolved by the guard's `include` so the organization scope of an
+  // API-key-mode request record needs no second query (phase 11 §4.2 rule 5).
+  project: { organizationId: '0192f2a0-0000-7000-8000-00000000000a' },
 };
 
 describe('ApiKeyAuthGuard (phase 5 §4.5, D4)', () => {
@@ -44,9 +47,15 @@ describe('ApiKeyAuthGuard (phase 5 §4.5, D4)', () => {
     } as unknown as ExecutionContext;
 
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(prisma.apiKey.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: { project: { select: { organizationId: true } } },
+      }),
+    );
     expect(request.apiKey).toMatchObject({
       key_id: ACTIVE_ROW.id,
       project_id: ACTIVE_ROW.projectId,
+      organization_id: ACTIVE_ROW.project.organizationId,
       environment: 'test',
     });
   });

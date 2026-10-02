@@ -1,5 +1,5 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Logger, Module, type OnApplicationBootstrap } from '@nestjs/common';
+import { Inject, Logger, Module, type OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { LoggerModule } from 'nestjs-pino';
 
@@ -9,8 +9,18 @@ import { buildLoggerOptions } from '../logging/logger.config';
 import { PaymentsModule } from '../payments/payments.module';
 import { RedisModule } from '../redis/redis.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { RequestLoggingCoreModule } from '../request-logging/request-logging-core.module';
+import {
+  REQUEST_LOG_CLEANUP_JOB,
+  REQUEST_LOG_RETENTION_POLICY,
+  type RequestLogRetentionPolicy,
+} from '../request-logging/request-log-store.service';
 import { WebhookMaintenanceService } from './webhook-maintenance.service';
-import { parseRedisUrl, provideJobRetention } from './webhook-queue.service';
+import {
+  parseRedisUrl,
+  provideJobRetention,
+  WebhookQueueService,
+} from './webhook-queue.service';
 import { WebhookProcessor } from './webhook.processor';
 import { WEBHOOK_QUEUE_NAME } from './webhook-queue';
 import { WebhooksCoreModule } from './webhooks-core.module';
@@ -98,21 +108,36 @@ import { WebhooksCoreModule } from './webhooks-core.module';
     RedisModule,
     PaymentsModule,
     WebhooksCoreModule,
+    // The request-log retention pass (phase 11 D5) runs in this process as one
+    // more scheduled job on the shared queue (§14: schedule alongside Phase
+    // 10's maintenance rather than adding a job runner). The core module is
+    // enough — a worker never serves HTTP, so the capture middleware and the
+    // read controller stay out of this graph.
+    RequestLoggingCoreModule,
   ],
   providers: [WebhookProcessor, WebhookMaintenanceService],
 })
 export class WebhooksWorkerModule implements OnApplicationBootstrap {
   private readonly logger = new Logger(WebhooksWorkerModule.name);
 
-  constructor(private readonly maintenance: WebhookMaintenanceService) {}
+  constructor(
+    private readonly maintenance: WebhookMaintenanceService,
+    private readonly queue: WebhookQueueService,
+    @Inject(REQUEST_LOG_RETENTION_POLICY)
+    private readonly requestLogPolicy: RequestLogRetentionPolicy,
+  ) {}
 
   /**
-   * Registers the three repeatable passes after the consumer is up. A registration
+   * Registers the repeatable passes after the consumer is up. A registration
    * failure is logged and swallowed by the queue service; the next worker start
    * retries, and a worker that never registers simply does not run the passes.
    */
   async onApplicationBootstrap(): Promise<void> {
     await this.maintenance.registerSchedule();
+    await this.queue.ensureScheduler(
+      REQUEST_LOG_CLEANUP_JOB,
+      this.requestLogPolicy.cleanupIntervalMs,
+    );
     this.logger.log(`Webhook worker consuming the "${WEBHOOK_QUEUE_NAME}" queue.`);
   }
 }

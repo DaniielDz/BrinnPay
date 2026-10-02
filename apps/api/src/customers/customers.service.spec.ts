@@ -24,7 +24,7 @@ function sessionScope(projectId: string = PROJECT_ID): CustomersScope {
 function apiKeyScope(environment: 'test' | 'live' = 'test', projectId: string = PROJECT_ID): CustomersScope {
   return {
     mode: 'api_key',
-    key: { key_id: 'key-1', project_id: projectId, environment },
+    key: { key_id: 'key-1', project_id: projectId, organization_id: 'org-1', environment },
     project_id: projectId,
     environment,
   };

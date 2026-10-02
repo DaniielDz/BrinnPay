@@ -1698,11 +1698,35 @@ paths:
         view returns only records scoped to the project. Non-project requests
         (e.g. `/auth/*`) exist in the log store but are not exposed by this
         project-scoped endpoint.
+
+        Authority is **session-only**: an API key (`sk_test_...`) never reads
+        request logs and is rejected with `401`. Members of the project
+        organization holding the `logs.read` capability (every role) receive
+        `200`; an unknown or foreign `project_id` is `404`, so project existence
+        is never disclosed.
+
+        Ordering is **ascending by UUIDv7**, matching every other list. Pages are
+        stable and non-overlapping while filtering; `limit` defaults to `20` and
+        may not exceed `100`.
+
+        Records contain metadata only (method, path without query string, status,
+        duration, timestamp and scope ids) — never bodies, headers, query strings
+        or secrets. Records are written after the response completes, so one may
+        become visible slightly after the caller received its response. Rows are
+        retained for a configurable window (default **30 days**) and then removed
+        by the retention job; expired records are simply gone.
+
+        `environment` is an **optional equality filter**: absent it returns
+        records of both environments plus records with no environment; present it
+        returns only records whose environment matches (records with a null
+        environment are excluded). `request_id` is an optional exact lookup within
+        this project: no match returns an empty page, never a `404`.
       security:
         - SessionAuth: []
       parameters:
         - $ref: "#/components/parameters/ProjectId"
-        - $ref: "#/components/parameters/Environment"
+        - $ref: "#/components/parameters/RequestLogEnvironment"
+        - $ref: "#/components/parameters/RequestIdFilter"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -1947,6 +1971,37 @@ components:
         authentication the environment is derived from the key and must match.
       schema:
         $ref: "#/components/schemas/Environment"
+    RequestLogEnvironment:
+      name: environment
+      in: query
+      required: false
+      description: |
+        Optional equality filter over the recorded `environment` of a request
+        log (Phase 11, D1). Absent → every record of the project, including
+        records captured without an environment. Present → only records whose
+        environment equals the value; records with a null environment are
+        excluded. An invalid value is a `400 VALIDATION_ERROR`. Unlike the
+        environment parameter of the data endpoints, a *missing* value is never
+        an error here: the contract states no requiredness for this operation.
+      schema:
+        $ref: "#/components/schemas/Environment"
+    RequestIdFilter:
+      name: request_id
+      in: query
+      required: false
+      description: |
+        Optional exact lookup of one request log within the addressed project
+        (Phase 11, D8), used to find the record behind a request ID reported
+        from an error envelope or an `X-Request-Id` response header
+        (`docs/api-conventions.md` §7). Must match the server-assigned scheme
+        `req_` + 32 lowercase hex characters; a malformed value is a `400
+        VALIDATION_ERROR`. A well-formed ID with no match in this project
+        returns an empty page (`data: []`, `has_more: false`) — never a `404`
+        — and cannot address another project's records.
+      schema:
+        type: string
+        pattern: '^req_[0-9a-f]{32}$'
+        example: req_0192f2a0000070008000000000000001
     EventType:
       name: type
       in: query
@@ -3057,17 +3112,32 @@ components:
           type: [string, "null"]
           format: uuid
           description: API key entity, when the request was made with API-key authentication.
+        environment:
+          type: [string, "null"]
+          enum: [test, live, null]
+          description: |
+            Environment recorded with the request (Phase 11, D1). API-key
+            requests always carry the key's environment; session requests carry
+            the environment only when the request itself carried a validated
+            one, so requests without an environment (for example a project
+            retrieve) are recorded as `null`. Never mixed with another
+            project's environment.
         method:
           type: string
           enum: [GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD]
         path:
           type: string
-          description: Request path.
+          maxLength: 2048
+          description: |
+            Request path **without** the query string (Phase 11, D6). Query
+            strings, headers and bodies are never persisted.
         status_code:
           type: integer
         duration_ms:
           type: integer
-          description: Request duration in milliseconds, when measured.
+          description: |
+            Ingress to response completion, in whole milliseconds, when
+            measured.
         created_at:
           type: string
           format: date-time
@@ -3254,6 +3324,10 @@ components:
     RequestLogList:
       type: object
       required: [data, next_cursor, has_more]
+      description: |
+        Cursor page of request logs, ascending by UUIDv7 (Phase 11, D4).
+        `next_cursor` is `null` on the last page; `has_more` reports whether
+        another page exists.
       properties:
         data:
           type: array

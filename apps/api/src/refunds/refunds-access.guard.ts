@@ -66,12 +66,18 @@ export class RefundsAccessGuard implements CanActivate {
           },
         },
       });
+      // A non-member 404 never attaches the project context, so the request
+      // log (phase 11 §4.2 rule 5) records a null scope — a non-member can
+      // never write rows into a foreign tenant's log.
       if (!membership || !isRole(membership.role)) this.notFound();
+      // Attached after membership resolution so a 403 still carries the scope
+      // resolved to that point (phase 11 §4.2 rule 5) while non-member 404s
+      // stay null-scoped. Authorization is unchanged either way.
+      request.project = toResolvedProject(payment.project);
+      request.organizationMembership = toResolvedMembership(membership);
       if (!can(membership.role, requirement.capability)) {
         throw new ApiError(ErrorCode.FORBIDDEN, 'Insufficient permissions', 403);
       }
-      request.organizationMembership = toResolvedMembership(membership);
-      request.project = toResolvedProject(payment.project);
     }
     return true;
   }
