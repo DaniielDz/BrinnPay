@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 6 e2e (§9): the customers surface behind the dual-mode boundary
@@ -161,7 +162,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   // -------------------------------------------------------------------------
 
   it('create: environment required; email normalized, name trimmed, metadata defaulted; duplicates allowed (D1/D2/D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('create');
     const org = await createOrg(token, 'Customer Create Org');
@@ -195,7 +196,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   });
 
   it('create: invalid payloads are rejected at the boundary (400)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('create-invalid');
     const org = await createOrg(token, 'Customer Invalid Org');
@@ -225,7 +226,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   // -------------------------------------------------------------------------
 
   it('list: environment required; search is a case-insensitive substring on email/name (D2/D3)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('list');
     const org = await createOrg(token, 'Customer List Org');
@@ -266,7 +267,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   // -------------------------------------------------------------------------
 
   it('capability matrix: every role reads; only owner/admin create/update/delete (D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, admin, member, viewer, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Matrix Project');
@@ -319,7 +320,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   // -------------------------------------------------------------------------
 
   it('update: partial fields, normalized values, metadata replaced wholesale, no-op patches stable (D6/D7)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('update');
     const org = await createOrg(token, 'Customer Update Org');
@@ -373,7 +374,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   });
 
   it('delete: 204 then 404 for everyone; repeated delete is 404', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('delete');
     const org = await createOrg(token, 'Customer Delete Org');
@@ -394,7 +395,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   // -------------------------------------------------------------------------
 
   it('tenant isolation: strangers and cross-project ids are 404 everywhere (D1/D2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const ownerA = await register('iso-owner-a');
     const ownerB = await register('iso-owner-b');
@@ -433,7 +434,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   // -------------------------------------------------------------------------
 
   it('api-key mode: CRUD within the key scope; explicit environment mismatches → 422 (D2/D6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Key Scope Project');
@@ -479,7 +480,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   });
 
   it('api-key mode: cross-project and cross-environment targets are 404 (D6, non-disclosure)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const ownerA = await register('key-owner-a');
     const ownerB = await register('key-owner-b');
@@ -523,7 +524,7 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
   });
 
   it('api-key mode: missing/revoked/garbage credentials are 401', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Auth Project');

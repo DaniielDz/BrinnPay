@@ -10,6 +10,7 @@ import { ApiKeyAuthGuard } from '../src/api-keys/api-key-auth.guard';
 import { hashApiKey } from '../src/api-keys/api-key-crypto';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 5 e2e (§9): project CRUD, the project-scoped capability matrix
@@ -159,7 +160,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   // -------------------------------------------------------------------------
 
   it('create: membership in the org + projects.create required; environments are derived (§4.2, D3/D6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('create');
     const org = await createOrg(token, 'Create Org');
@@ -178,7 +179,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('create: unknown org → 404; blank name → 400 VALIDATION_ERROR (§4.2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('invalid-create');
     await createOrg(token, 'Invalid Org');
@@ -199,7 +200,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('project capability matrix: viewer reads, member denials, admin writes (§4.3, D3)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, admin, member, viewer, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Matrix API');
@@ -238,7 +239,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('tenant isolation: non-members get 404 everywhere (no project disclosure, D1/D2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Isolated Project');
@@ -263,7 +264,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('delete: owner/admin; subsequent access yields 404 (implicit key revocation, D7)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, admin, member, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Doomed Project');
@@ -282,7 +283,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('projects.list paginates with limit and cursor (§4.5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('pag-owner');
     const org = await createOrg(token, 'Project Paging Org');
@@ -309,7 +310,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   // -------------------------------------------------------------------------
 
   it('create: returns sk_test_/sk_live_ plaintext once; only the SHA-256 hash is stored (D4/D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Key Lifecycle');
@@ -332,7 +333,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('list: metadata only — both environments, revoked keys included, no plaintext (§4.2, D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Key Listing');
@@ -356,7 +357,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('revoke: idempotent 204; cross-project revocation is 404 (no disclosure, D2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const ownerA = await register('key-owner-a');
     const ownerB = await register('key-owner-b');
@@ -381,7 +382,7 @@ describe('BrinnPay projects & API keys (e2e, phase 5)', () => {
   });
 
   it('key lookup infrastructure: active keys authenticate with (project, environment); revoked keys are rejected (D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, org } = await buildTeam();
     const project = await createProject(owner.token, org.id, 'Lookup Project');

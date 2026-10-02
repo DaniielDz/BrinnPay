@@ -10,6 +10,7 @@ import type { PaymentEvent } from '../src/payments/payment-events';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
 import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../src/webhooks/webhook-events';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 8 e2e (§8.1): the `payments.create` idempotency contract against the
@@ -165,7 +166,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   // -------------------------------------------------------------------------
 
   it('stores the first successful response and replays it for a same-scope retry (§7.2, §7.3)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('replay');
 
     const first = await createPayment(token, projectId, customerId, 'order_replay_1').expect(201);
@@ -181,7 +182,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('replays the stored snapshot even after the payment advanced (§4.2.4, §6.7)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('snapshot');
 
     const first = await createPayment(token, projectId, customerId, 'order_snapshot_1').expect(201);
@@ -205,7 +206,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('normalizes the key so a padded retry replays the same record (§4.1)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('normalize');
 
     const first = await createPayment(token, projectId, customerId, 'order_pad_1').expect(201);
@@ -216,7 +217,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('answers each replay with its own request id (§4.3.2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('request-id');
 
     const first = await createPayment(token, projectId, customerId, 'order_reqid_1').expect(201);
@@ -234,7 +235,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   // -------------------------------------------------------------------------
 
   it('treats the same key in another project as an independent operation (§7.5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const alpha = await setup('scope-a');
     const beta = await setup('scope-b');
 
@@ -247,7 +248,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('treats the same key under another operation scope as independent (§7.6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('scope-op');
     const now = new Date();
 
@@ -273,7 +274,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('replays across authentication modes for the same project (§4.2.3)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('auth-mode');
 
     const first = await createPayment(token, projectId, customerId, 'order_mode_1').expect(201);
@@ -299,7 +300,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   // -------------------------------------------------------------------------
 
   it('treats reuse after the retention window as a new operation (§7.7, §5.2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('expiry');
 
     const first = await createPayment(token, projectId, customerId, 'order_expiry_1').expect(201);
@@ -326,7 +327,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   // -------------------------------------------------------------------------
 
   it('creates exactly one payment for concurrent same-key retries (§7.4, D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('concurrent');
     const attempts = 6;
 
@@ -348,7 +349,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   }, 20_000);
 
   it('keeps concurrent retries of different keys independent (no cross-talk)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('concurrent-keys');
 
     const responses = await Promise.all(
@@ -368,7 +369,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   // -------------------------------------------------------------------------
 
   it('rejects an invalid Idempotency-Key with 400 VALIDATION_ERROR (§7.8)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('invalid-key');
 
     for (const key of ['   ', 'k'.repeat(256)]) {
@@ -382,7 +383,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('does not let a rejected request poison the key (§7.9, §6.8)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, orgId, projectId, customerId } = await setup('poison');
 
     // (a) Business validation failure inside the mutation (unknown customer).
@@ -414,7 +415,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('leaves no replayable record behind when the mutation is rejected (§6.8)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId } = await setup('rollback');
 
     const failed = await createPayment(token, projectId, uuidv7(), 'order_rollback_1');
@@ -427,7 +428,7 @@ describe('BrinnPay idempotency — payments.create (e2e, phase 8)', () => {
   });
 
   it('keeps working without the header (idempotency is optional, §4.2.2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token, projectId, customerId } = await setup('no-key');
 
     const first = await createPayment(token, projectId, customerId).expect(201);

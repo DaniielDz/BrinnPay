@@ -15,6 +15,7 @@ import { RedisService } from '../src/redis/redis.service';
 import { WEBHOOK_QUEUE_NAME } from '../src/webhooks/webhook-queue';
 import { parseRedisUrl } from '../src/webhooks/webhook-queue.service';
 import { WebhooksWorkerModule } from '../src/webhooks/webhooks-worker.module';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 10 delivery e2e (§9, D3/D7/D11/D14): the **real** pipeline — API process
@@ -132,7 +133,7 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
   afterEach(async () => {
     received.length = 0;
     responders.clear();
-    if (!available) return;
+    requireDependencies(available);
     // A failed test must never be able to leave the shared queue paused.
     await queue.resume();
     const projects = await prisma.project.findMany({
@@ -212,7 +213,7 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
   }
 
   it('delivers a signed request the destination can verify, and records it as delivered', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('deliver');
 
     const endpoint = await call(token)
@@ -279,7 +280,7 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
   });
 
   it('records a failing destination as a retry with a bounded backoff and no stored body', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('retry');
 
     responders.set('/boom', (res) => {
@@ -315,7 +316,7 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
   });
 
   it('never follows a redirect and records the 3xx as a terminal failure', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('redirect');
 
     responders.set('/redirect', (res) => {
@@ -345,7 +346,7 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
   });
 
   it('the advancement sweep delivers payment.succeeded without anybody reading the payment (D3/F2)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('sweep');
 
     const endpoint = await call(token)
@@ -375,7 +376,7 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
   });
 
   it('a disabled endpoint still runs a queued delivery, and a deleted one is a no-op (D11)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('enabled');
 
     const endpoint = await call(token)

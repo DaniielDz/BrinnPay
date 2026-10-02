@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 12 e2e (§10/§11) against real PostgreSQL:
@@ -80,7 +81,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   });
 
   afterEach(async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     // Payments reference customers with `onDelete: Restrict`, so they go first;
     // everything else cascades from the project or is removed explicitly below.
     const projects = await prisma.project.findMany({
@@ -185,7 +186,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('records each authentication outcome exactly once with its request correlation (AC2)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const owner = await registerAgent('auth');
     const memberships = await prisma.organizationMember.findMany({
       where: { userId: owner.userId },
@@ -256,7 +257,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   });
 
   it('records invitation and membership changes with allowlisted data and no email (AC3/D13)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId } = await setup('acl');
     const invitationsUrl = `/api/v1/organizations/${organizationId}/invitations`;
 
@@ -341,7 +342,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   });
 
   it('records project mutations, an idempotent replay and the background terminal edge (AC3–AC6)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, customersUrl, paymentsUrl, apiKeysUrl } =
       await setup('project');
 
@@ -485,7 +486,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('rolls a mutation back when its audit insert fails, and leaves login and readiness untouched (AC4)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, paymentsUrl, customersUrl } = await setup('atomic');
 
     const customer = await auth(owner.token)
@@ -598,7 +599,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('enforces session-only authority and organization non-disclosure (AC7)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, auditUrl, apiKeysUrl } = await setup('read');
     // At least one entry so a 200 is never vacuously empty.
     const key = await auth(owner.token).post(apiKeysUrl).send({ environment: 'test' });
@@ -684,7 +685,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('paginates ascending with the contracted projection and rejects invalid queries (AC8)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, auditUrl, apiKeysUrl, customersUrl } = await setup('page');
 
     // Four API keys + one customer → five project-scoped entries, in order.
@@ -766,7 +767,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('keeps entries append-only in the database and bound to their organization (AC9)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, auditUrl, apiKeysUrl } = await setup('life');
     const key = await auth(owner.token).post(apiKeysUrl).send({ environment: 'test' });
     expect(key.status).toBe(201);
@@ -799,7 +800,7 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('never persists a secret, email or free text in any entry (AC10)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, paymentsUrl, apiKeysUrl, customersUrl, auditUrl } =
       await setup('leak');
     const defaultOrg = (

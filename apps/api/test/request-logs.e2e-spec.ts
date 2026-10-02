@@ -9,6 +9,7 @@ import { uuidv7 } from '../src/common/uuid/uuid';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
 import { RequestLogStoreService } from '../src/request-logging/request-log-store.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 11 e2e (§9/§10) against real PostgreSQL:
@@ -78,7 +79,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   afterEach(async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const projects = await prisma.project.findMany({
       where: { organization: { name: { startsWith: `logs11-`, endsWith: `-${RUN}` } } },
       select: { id: true, organizationId: true },
@@ -232,7 +233,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('persists one row per API request, correlated with the response header and the error envelope (AC2/AC3)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, customersUrl } = await setup('capture');
 
     const created = await auth(owner.token)
@@ -279,7 +280,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   it('records nothing for health probes, Swagger UI traffic, or CORS preflights (AC2, D7)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId } = await setup('excluded');
     const startedAt = new Date(Date.now() - 1_000);
 
@@ -312,7 +313,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   it('records unauthenticated and unknown-project requests with null scope (AC2/AC4)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner } = await setup('scope');
 
     const unauthorized = await request(server()).get('/api/v1/projects');
@@ -346,7 +347,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   it('records API-key requests with the key scope, and session requests with a validated environment (AC4, D1)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, customersUrl, logsUrl } = await setup('modes');
     const key = await createApiKey(owner.token, projectId, 'test');
 
@@ -386,7 +387,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('leaks no password, API key, Idempotency-Key, or signing secret into any row (AC6, §8)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const owner = await register('secrets');
     const organization = await createOrg(owner.token, `logs11-secrets-${RUN}`);
     const project = await createProject(owner.token, organization.id, 'Logs secrets');
@@ -477,7 +478,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('is session-only and available to every role of the D2 matrix (AC7, F6)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
 
     // A four-role team so the matrix is exercised through real memberships.
     const owner = await register('matrix-owner');
@@ -546,7 +547,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   it('applies the D1 environment semantics and never crosses projects (AC9)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, logsUrl } = await setup('filter-env');
 
     const otherOwner = await register('filter-env-other');
@@ -584,7 +585,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   it('returns stable, non-overlapping ascending pages and rejects malformed paging (AC8, D4)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, logsUrl } = await setup('paging');
 
     // Seeded rows are older than anything the suite captures, so the first page
@@ -628,7 +629,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   });
 
   it('resolves an exact request id inside the project, or an empty page — never 404 (AC10, D8)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, logsUrl } = await setup('request-id');
 
     const otherOwner = await register('request-id-other');
@@ -665,7 +666,7 @@ describe('request logging (Phase 11, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('drops rows past retention and leaves the fresh ones, then follows tenant deletion (AC11, D5)', async () => {
-    if (!reachable) return;
+    requireDependencies(reachable);
     const { owner, organizationId, projectId, logsUrl } = await setup('retention');
 
     const expired = await seed({

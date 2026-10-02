@@ -8,6 +8,7 @@ import { configureApp } from '../src/bootstrap';
 import { PaymentsService } from '../src/payments/payments.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 10 e2e (§9): the webhook surface end-to-end against real PostgreSQL and
@@ -55,7 +56,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   afterEach(async () => {
-    if (!available) return;
+    requireDependencies(available);
     const projects = await prisma.project.findMany({
       where: { organization: { name: { startsWith: 'wh-', endsWith: `-${stamp}` } } },
       select: { id: true, organizationId: true },
@@ -123,7 +124,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('registers an endpoint, returns the secret exactly once, and never leaks it again', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl } = await setup('secret');
 
     const created = await createEndpoint(token, projectId, {
@@ -161,7 +162,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('rejects invalid registration payloads at the boundary (400)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId } = await setup('invalid');
 
     const cases: Record<string, unknown>[] = [
@@ -187,7 +188,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('allows a duplicate URL (D16) and rejects an empty patch (400)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId } = await setup('duplicate');
 
     const first = await createEndpoint(token, projectId, {
@@ -210,7 +211,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('requires an explicit environment for session listings (400)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, endpointsUrl, eventsUrl } = await setup('env');
 
     await call(token).get(endpointsUrl).expect(400);
@@ -226,7 +227,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('enforces the capability matrix: viewer reads, mutations are 403, non-member is 404', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, email, organizationId, projectId, endpointsUrl } = await setup('rbac');
 
     for (const role of ['admin', 'member', 'viewer'] as const) {
@@ -292,7 +293,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('API-key mode: no environment parameter, a mismatch is 422, another project is 404', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl } = await setup('apikey');
     const other = await setup('apikey-other');
 
@@ -343,7 +344,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('API-key mode drives all eight operations without an environment parameter (F6, §4.4)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId } = await setup('apikey-all');
     const key = (
       await call(token)
@@ -397,7 +398,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('paginates with stable opaque cursors and enforces the limit boundaries (D15)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl, eventsUrl, customerId } = await setup('paging');
     const endpoint = await createEndpoint(token, projectId, {
       environment: 'test',
@@ -440,7 +441,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('persists the event and fans out one delivery per matching endpoint in the same transaction', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl, customerId } = await setup('fanout');
 
     const subscribed = await createEndpoint(token, projectId, {
@@ -518,7 +519,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('lists events of the environment with the exact stored envelope and a type filter (D15)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, eventsUrl } = await setup('events');
 
     const payment = await call(token)
@@ -565,7 +566,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('a read and the advancement sweep racing the same payment emit exactly one payment.succeeded (AC3, D3/F2)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId } = await setup('race');
 
     const endpoint = await createEndpoint(token, projectId, {
@@ -605,7 +606,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('replays an event to an endpoint: 202, a new delivery, no new event, repeatable', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl, customerId } = await setup('replay');
 
     const endpoint = await createEndpoint(token, projectId, {
@@ -647,7 +648,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('replay preconditions: 404 for an unknown/foreign event, 422 for disabled or unsubscribed', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl, customerId } = await setup('replay-pre');
     const other = await setup('replay-pre-other');
     // A second project with its own payment, so the foreign-event case is real.
@@ -702,7 +703,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   // -------------------------------------------------------------------------
 
   it('deleting an endpoint cascades its deliveries and leaves the events replayable elsewhere', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, endpointsUrl, customerId } = await setup('delete');
 
     const endpoint = await createEndpoint(token, projectId, {
@@ -739,7 +740,7 @@ describe('webhooks (Phase 10, real PostgreSQL)', () => {
   });
 
   it('deleting the project cascades its endpoints, deliveries, and events (AC9, D11)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, organizationId, projectId, customerId } = await setup('project-delete');
 
     const endpoint = await createEndpoint(token, projectId, {

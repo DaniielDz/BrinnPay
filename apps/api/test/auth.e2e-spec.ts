@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 3 e2e (§9.1): supertest against the running Nest application with real
@@ -93,7 +94,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   };
 
   it('registers a user, establishes a session and sets an HttpOnly cookie (§8.1, §8.9)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { response, cookie } = await register('e2e-register@example.com');
 
@@ -116,7 +117,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('creates the default organization with the owner membership (ADR-0010, D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { response } = await register('e2e-org@example.com', 'password-123', 'Ada Lovelace');
     const userId = response.body.user.id;
@@ -131,7 +132,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('duplicate email (any case) returns 409 CONFLICT (D8)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     await register('e2e-dup@example.com');
 
     const dup = await request(server())
@@ -142,7 +143,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('login issues a session and /auth/me returns the public user; missing token → 401 (§8.7)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { response, cookie } = await login('e2e-register@example.com');
     expect(response.status).toBe(200);
@@ -161,7 +162,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('login yields an identical generic 401 for unknown email and wrong password (§8.4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const unknown = await request(server())
       .post('/api/v1/auth/login')
@@ -177,7 +178,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('refresh rotates the session (D3): valid rotation issues a new token (§8.5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { cookie } = await login('e2e-register@example.com');
     expect(cookie).toBeTruthy();
@@ -194,7 +195,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('refresh detects reuse of a rotated (revoked-but-unexpired) token and revokes all sessions (§8.5, D3)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     await register('e2e-reuse@example.com');
     const { cookie: first } = await login('e2e-reuse@example.com');
@@ -222,7 +223,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('logout revokes the session and clears the cookie; repeat logout is idempotent 204 (D9) (§8.6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { cookie } = await login('e2e-register@example.com');
     expect(cookie).toBeTruthy();
@@ -246,7 +247,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('validates request bodies and honors password bounds (D6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const shortPassword = await request(server())
       .post('/api/v1/auth/register')
@@ -261,7 +262,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
   });
 
   it('does not leak credential or token material in error responses (§8.11)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const response = await request(server())
       .post('/api/v1/auth/login')
@@ -275,7 +276,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
     let limitedApp: INestApplication;
 
     beforeAll(async () => {
-      if (!reachable.value) return;
+      requireDependencies(reachable.value);
       process.env.AUTH_RATE_LIMIT_IP_LOGIN_MAX = '3';
       process.env.AUTH_RATE_LIMIT_ACCOUNT_LOGIN_MAX = '3';
       process.env.AUTH_RATE_LIMIT_WINDOW_SECONDS = '3600';
@@ -291,7 +292,7 @@ describe('BrinnPay auth (e2e, phase 3)', () => {
     });
 
     it('returns 429 RATE_LIMITED once login attempts exceed the limit', async () => {
-      if (!reachable.value) return;
+      requireDependencies(reachable.value);
 
       const attempts = await Promise.all(
         Array.from({ length: 6 }, () =>
