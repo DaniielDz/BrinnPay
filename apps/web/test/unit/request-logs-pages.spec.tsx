@@ -165,6 +165,96 @@ describe('request logs page (phase 11 §7)', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
   });
 
+  it('drops a page still in flight when the route changes to another project (F3)', async () => {
+    const stale: { release: (() => void) | null } = { release: null };
+    const { fetchMock } = stubRequestLogsApi({ pageSize: 2 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('cursor=')) {
+          await new Promise<void>((resolve) => {
+            stale.release = resolve;
+          });
+        }
+        return fetchMock(input, init);
+      }),
+    );
+
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    const { rerender } = render(
+      <AuthProvider>
+        <ProjectLogsRequestsPage />
+      </AuthProvider>,
+    );
+    const table = await screen.findByRole('table', { name: 'Request logs' });
+    expect(within(table).getAllByRole('row')).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(stale.release).not.toBeNull());
+
+    paramsMock.mockReturnValue({ projectId: 'proj-2' });
+    rerender(
+      <AuthProvider>
+        <ProjectLogsRequestsPage />
+      </AuthProvider>,
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Request logs' })).getAllByRole('row'),
+      ).toHaveLength(3),
+    );
+
+    stale.release?.();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Request logs' })).getAllByRole('row'),
+      ).toHaveLength(3),
+    );
+    expect(
+      within(screen.getByRole('table', { name: 'Request logs' })).queryByText('DELETE'),
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeInTheDocument();
+  });
+
+  it('drops a page still in flight when the filter changes (F3)', async () => {
+    const stale: { release: (() => void) | null } = { release: null };
+    const { fetchMock } = stubRequestLogsApi({ pageSize: 2 });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('cursor=')) {
+          await new Promise<void>((resolve) => {
+            stale.release = resolve;
+          });
+        }
+        return fetchMock(input, init);
+      }),
+    );
+    renderViewer();
+
+    const table = await screen.findByRole('table', { name: 'Request logs' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(stale.release).not.toBeNull());
+
+    fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'test' } });
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Request logs' })).getAllByRole('row'),
+      ).toHaveLength(2),
+    );
+
+    stale.release?.();
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Request logs' })).getAllByRole('row'),
+      ).toHaveLength(2),
+    );
+    expect(
+      within(screen.getByRole('table', { name: 'Request logs' })).queryByText('DELETE'),
+    ).toBeNull();
+    expect(table).toBeInTheDocument();
+  });
+
   it('copies a request id for issue reporting', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
