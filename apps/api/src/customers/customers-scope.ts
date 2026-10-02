@@ -27,6 +27,8 @@ export interface SessionModeScope {
   mode: 'session';
   project: ResolvedProject;
   project_id: string;
+  /** The session user the guard resolved — audit actor (phase 12 §4.2 rule 4). */
+  user_id: string;
 }
 
 export type CustomersScope = ApiKeyModeScope | SessionModeScope;
@@ -53,10 +55,16 @@ export const CustomersScope = createParamDecorator(
       };
     }
     if (project) {
+      const user = request.authUser;
+      if (!user) {
+        // Programming error: session mode runs only after SessionAuthGuard.
+        throw new Error('CustomersScope used without an authenticated session user');
+      }
       return {
         mode: 'session',
         project,
         project_id: project.project_id,
+        user_id: user.id,
       };
     }
     // Programming error: must only be used behind CustomersAccessGuard.

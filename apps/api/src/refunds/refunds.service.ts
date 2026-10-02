@@ -1,5 +1,8 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 
+import { AUDIT_LOG_PORT, type AuditLogPort } from '../audit-logging/audit-log.port';
+import type { AuditEnvironment } from '../audit-logging/audit-actions';
+import { actorOfScope, organizationIdOfScope } from '../audit-logging/audit-scope';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
 import { parseAmountMinor } from '../common/money/money';
@@ -28,6 +31,7 @@ export class RefundsService {
     private readonly payments: PaymentsService,
     private readonly idempotency: IdempotencyService,
     @Inject(WEBHOOK_EVENT_PORT) private readonly events: WebhookEventPort,
+    @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
   ) {}
 
   async list(scope: PaymentsScope, paymentId: string, query: ListQueryDto): Promise<CursorPage<RefundResponse>> {
@@ -124,6 +128,23 @@ export class RefundsService {
       request_id: requestId ?? null,
     };
     await this.events.persist(tx, event);
+    // Phase 12 §5.4/§6.2: the `refund.created` entry joins the balance
+    // transaction, so a committed refund always has its entry and an
+    // idempotency replay (which never reaches this code) writes none (§4.2
+    // rule 6). The refund `reason` is deliberately absent — D13 forbids free
+    // text in `data`.
+    await this.audit.record(tx, {
+      action: 'refund.created',
+      organization_id: organizationIdOfScope(scope),
+      actor: actorOfScope(scope),
+      project_id: scope.project_id,
+      environment: payment.environment as AuditEnvironment,
+      refund_id: row.id,
+      payment_id: payment.id,
+      amount: body.amount,
+      currency: body.currency,
+      request_id: requestId ?? null,
+    });
     return {
       status: HttpStatus.CREATED, body,
       // Scheduling is post-commit and best-effort (§4.3.7); reconciliation repairs

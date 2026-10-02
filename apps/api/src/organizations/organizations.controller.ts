@@ -9,11 +9,13 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 
 import { CurrentUser, type AuthUser } from '../auth/current-user';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
+import { resolveRequestId } from '../request-id/request-id';
 import { ListQueryDto, type CursorPage } from './cursor';
 import { InvitationCreateDto } from './dto/invitation-create.dto';
 import { MemberRoleDto } from './dto/member-role.dto';
@@ -100,8 +102,15 @@ export class OrganizationsController {
     @CurrentMembership() membership: ResolvedMembership,
     @Param('user_id') userId: string,
     @Body() dto: MemberRoleDto,
+    @Req() request: { id?: unknown },
   ): Promise<OrganizationMemberResponse> {
-    return this.organizations.updateMember(membership.organization_id, membership, userId, dto.role);
+    return this.organizations.updateMember(
+      membership.organization_id,
+      membership,
+      userId,
+      dto.role,
+      resolveRequestId(request),
+    );
   }
 
   @Delete(':organization_id/members/:user_id')
@@ -111,8 +120,14 @@ export class OrganizationsController {
   async removeMember(
     @CurrentMembership() membership: ResolvedMembership,
     @Param('user_id') userId: string,
+    @Req() request: { id?: unknown },
   ): Promise<void> {
-    await this.organizations.removeMember(membership.organization_id, membership, userId);
+    await this.organizations.removeMember(
+      membership.organization_id,
+      membership,
+      userId,
+      resolveRequestId(request),
+    );
   }
 
   @Get(':organization_id/invitations')
@@ -136,12 +151,14 @@ export class OrganizationsController {
   createInvitation(
     @CurrentMembership() membership: ResolvedMembership,
     @Body() dto: InvitationCreateDto,
+    @Req() request: { id?: unknown },
   ): Promise<InvitationResponse> {
     return this.organizations.createInvitation(
       membership.organization_id,
       membership,
       dto.email,
       dto.role,
+      resolveRequestId(request),
     );
   }
 
@@ -152,7 +169,13 @@ export class OrganizationsController {
   async cancelInvitation(
     @CurrentMembership() membership: ResolvedMembership,
     @Param('invitation_id') invitationId: string,
+    @Req() request: { id?: unknown },
   ): Promise<void> {
-    await this.organizations.cancelInvitation(membership.organization_id, invitationId);
+    await this.organizations.cancelInvitation(
+      membership.organization_id,
+      invitationId,
+      membership,
+      resolveRequestId(request),
+    );
   }
 }

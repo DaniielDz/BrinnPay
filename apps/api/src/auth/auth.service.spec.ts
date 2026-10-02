@@ -28,6 +28,7 @@ describe('AuthService (register/login, D4/D5/D8)', () => {
     organizationMember: { create: jest.Mock };
   };
   let password: PasswordService;
+  let audit: { record: jest.Mock; captureAuth: jest.Mock };
   const tokens = { signAccessToken: jest.fn().mockReturnValue('jwt-token') } as unknown as TokenService;
   const refreshSessions = {
     createForUserInTransaction: jest.fn().mockResolvedValue({ token: 'refresh-token', sessionId: 's', expiresAt: new Date() }),
@@ -66,12 +67,14 @@ describe('AuthService (register/login, D4/D5/D8)', () => {
 
     password = new PasswordService();
 
+    audit = { record: jest.fn(async () => undefined), captureAuth: jest.fn() };
     service = new AuthService(
       prisma as unknown as PrismaService,
       password,
       tokens as unknown as TokenService,
       refreshSessions as unknown as RefreshSessionService,
       config,
+      audit as never,
     );
   });
 
@@ -99,6 +102,18 @@ describe('AuthService (register/login, D4/D5/D8)', () => {
       expect(result.user.email).toBe('dev@example.com');
       expect(result.accessToken).toBe('jwt-token');
       expect(result.refreshToken).toBe('refresh-token');
+      // Phase 12 §5.2: `user.registered` commits inside the registration
+      // transaction (fail-closed, D7) and never carries the credential.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'user.registered',
+        user_id: 'user-id-1',
+        request_id: null,
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(txn);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain('password-123');
+      // Outcome events of other kinds never touch the registration path.
+      expect(audit.captureAuth).not.toHaveBeenCalled();
     });
 
     it('derives the default org name from the display name (D5)', async () => {
@@ -126,6 +141,8 @@ describe('AuthService (register/login, D4/D5/D8)', () => {
       await expect(
         service.register({ email: 'DEV@EXAMPLE.COM', password: 'password-123' }),
       ).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+      // The rejected registration never reaches the write path (AC4).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('maps a unique-constraint violation to 409 CONFLICT even in a race', async () => {
@@ -154,6 +171,16 @@ describe('AuthService (register/login, D4/D5/D8)', () => {
       const result = await service.login({ email: 'DEV@Example.com', password: 'correct-password' });
       expect(result.user.email).toBe('dev@example.com');
       expect(refreshSessions.createForUser).toHaveBeenCalledTimes(1);
+      // §5.2/D7: the success outcome is captured best-effort, never through
+      // a transaction, and never with the presented password.
+      expect(audit.captureAuth).toHaveBeenCalledTimes(1);
+      expect(audit.captureAuth).toHaveBeenCalledWith({
+        action: 'user.logged_in',
+        user_id: 'user-id-1',
+        request_id: null,
+      });
+      expect(JSON.stringify(audit.captureAuth.mock.calls)).not.toContain('correct-password');
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('returns the identical 401 for unknown email and wrong password', async () => {
@@ -165,6 +192,45 @@ describe('AuthService (register/login, D4/D5/D8)', () => {
       expect(wrongPassword).toMatchObject({ code: 'UNAUTHENTICATED', status: 401 });
       expect(unknownEmail).toMatchObject({ code: 'UNAUTHENTICATED', status: 401 });
       expect(wrongPassword.message).toBe(unknownEmail.message);
+
+      // §5.2/D13: a known account with a wrong password records the archetypal
+      // security event; an unknown address records nothing (no user to
+      // attribute, presented email is third-party PII) — the response above
+      // stays identical either way.
+      expect(audit.captureAuth).toHaveBeenCalledTimes(1);
+      expect(audit.captureAuth).toHaveBeenCalledWith({
+        action: 'user.login_failed',
+        user_id: 'user-id-1',
+        request_id: null,
+      });
+      expect(JSON.stringify(audit.captureAuth.mock.calls)).not.toContain('ghost@example.com');
+      expect(JSON.stringify(audit.captureAuth.mock.calls)).not.toContain('not-the-password');
+    });
+  });
+
+  describe('logout (phase 12 §5.2)', () => {
+    it('records user.logged_out only when a session was actually revoked', async () => {
+      (refreshSessions.revoke as jest.Mock).mockResolvedValueOnce('user-id-1');
+
+      await service.logout('refresh-token-value', 'req_abc');
+
+      expect(audit.captureAuth).toHaveBeenCalledTimes(1);
+      expect(audit.captureAuth).toHaveBeenCalledWith({
+        action: 'user.logged_out',
+        user_id: 'user-id-1',
+        request_id: 'req_abc',
+      });
+      // The presented session token is authentication material — never stored.
+      expect(JSON.stringify(audit.captureAuth.mock.calls)).not.toContain('refresh-token-value');
+    });
+
+    it('records nothing for a rejected logout (no authenticated actor)', async () => {
+      (refreshSessions.revoke as jest.Mock).mockResolvedValueOnce(null);
+
+      await service.logout('revoked-or-invalid');
+
+      expect(audit.captureAuth).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 });

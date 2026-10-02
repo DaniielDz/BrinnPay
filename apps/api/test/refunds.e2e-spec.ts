@@ -9,6 +9,7 @@ import { uuidv7 } from '../src/common/uuid/uuid';
 import { PrismaService } from '../src/prisma/prisma.service';
 import type { RefundEvent } from '../src/refunds/refund-events';
 import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../src/webhooks/webhook-events';
+import { requireDependencies } from './support/db-e2e';
 
 const stamp = Date.now().toString(36);
 const password = 'password-123';
@@ -67,7 +68,7 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
   }
 
   afterEach(async () => {
-    if (!available) return;
+    requireDependencies(available);
     // Only clean resources created by this suite; never wipe shared test data.
     const projects = await prisma.project.findMany({
       where: { organization: { name: { startsWith: 'refund-', endsWith: `-${stamp}` } } },
@@ -87,7 +88,7 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
   });
 
   it('partial then full remaining, rejects excess and exhausted; lists and retrieves scoped projections', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, paymentId, projectId } = await setup('balance');
     const url = `/api/v1/payments/${paymentId}/refunds`;
     const first = await call(token).post(url).send({ amount: '3.25', reason: '  duplicate  ' }).expect(201);
@@ -109,7 +110,7 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
   });
 
   it('serializes simultaneous different-key and unkeyed attempts and replays a single keyed success', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, paymentId, projectId } = await setup('race');
     const url = `/api/v1/payments/${paymentId}/refunds`;
     const results = await Promise.all([
@@ -131,7 +132,7 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
   });
 
   it('enforces key environment and session membership, validates body, and rejects cross-parent replay', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const a = await setup('isolation');
     const b = await setup('isolation-b');
     const url = `/api/v1/payments/${a.paymentId}/refunds`;
@@ -159,7 +160,7 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
   });
 
   it('enforces member/viewer read-only access and API-key TEST/LIVE isolation including replay', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const a = await setup('isolation');
     const url = `/api/v1/payments/${a.paymentId}/refunds`;
     const register = await request(server()).post('/api/v1/auth/register')
@@ -196,7 +197,7 @@ describe('refunds (Phase 9, real PostgreSQL)', () => {
   });
 
   it('replays one successful result across modes, rejects non-succeeded payments, and reevaluates expired keys', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const a = await setup('balance');
     const url = `/api/v1/payments/${a.paymentId}/refunds`;
     // Terminal `failed` is deterministic: the payment read-time transition

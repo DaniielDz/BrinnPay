@@ -12,6 +12,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
 import { WebhookMaintenanceService } from '../src/webhooks/webhook-maintenance.service';
 import { WebhooksWorkerModule } from '../src/webhooks/webhooks-worker.module';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 10 retention e2e (AC12, D9).
@@ -77,7 +78,7 @@ describe('webhook retention (Phase 10, real PostgreSQL + worker)', () => {
   });
 
   afterEach(async () => {
-    if (!available) return;
+    requireDependencies(available);
     const projects = await prisma.project.findMany({
       where: { organization: { name: { startsWith: 'whr-', endsWith: `-${stamp}` } } },
       select: { id: true, organizationId: true },
@@ -140,7 +141,7 @@ describe('webhook retention (Phase 10, real PostgreSQL + worker)', () => {
       .expect(201);
 
   it('drops events past retention (with their deliveries) and makes their replay a 404 (AC12, D9)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('expiry');
 
     const endpoint = await call(token)

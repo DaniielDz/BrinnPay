@@ -60,10 +60,11 @@ model Organization {
   createdAt DateTime @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @map("updated_at") @db.Timestamptz(3)
 
-  members     OrganizationMember[]
-  invitations Invitation[]
-  projects    Project[]
-  requestLogs RequestLog[]
+  members        OrganizationMember[]
+  invitations    Invitation[]
+  projects       Project[]
+  requestLogs    RequestLog[]
+  auditLogEntries AuditLogEntry[]
 
   @@map("organizations")
 }
@@ -403,4 +404,43 @@ model Invitation {
   @@index([organizationId])
   @@index([email])
   @@map("invitations")
+}
+
+// Phase 12 (ADR-0011): audit log entries. `audit_log_entries` is the immutable,
+// organization-scoped security/business trail (phase 12 §6.1): one row per
+// committed catalog action, written by the `audit-logging` capability only.
+//
+// Columns are an allowlist projection of the contract's `AuditLogEntry` plus
+// the D6 `project_id`/`environment` attribution columns — the table has no
+// column capable of holding a body, a header, an email, free text or a secret,
+// so absence is the control (§4.2 rule 7, D13). `actor_id`, `resource_id` and
+// `project_id` are plain UUID **values with no foreign key** (D8): historical
+// attribution survives the deletion of the actor, the resource or the project
+// without any `ON DELETE SET NULL` action ever rewriting the row.
+//
+// Exactly one foreign key exists — `organization_id` ON DELETE CASCADE (D9):
+// deleting a tenant removes its trail, while every other lifecycle (project,
+// key, user, membership deletion) leaves entries intact. The migration installs
+// a trigger that rejects `UPDATE` outright (D8, defense in depth for the
+// append-only rule of phase 1 §8); `DELETE` is reached only through the tenant
+// cascade. No retention index exists because there is no cleanup (D9).
+//
+// Index: `(organization_id, id)` serves the contract's ascending cursor scan.
+model AuditLogEntry {
+  id             String   @id @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  actorType      String   @map("actor_type") @db.VarChar(20)
+  actorId        String?  @map("actor_id") @db.Uuid
+  action         String   @db.VarChar(100)
+  resourceType   String   @map("resource_type") @db.VarChar(50)
+  resourceId     String?  @map("resource_id") @db.Uuid
+  projectId      String?  @map("project_id") @db.Uuid
+  environment    String?  @db.VarChar(20)
+  data           Json?    @db.JsonB
+  createdAt      DateTime @map("created_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, id])
+  @@map("audit_log_entries")
 }

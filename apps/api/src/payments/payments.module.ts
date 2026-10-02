@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { ApiKeysModule } from '../api-keys/api-keys.module';
+import { AuditLoggingCoreModule } from '../audit-logging/audit-logging-core.module';
 import { IdempotencyModule } from '../idempotency/idempotency.module';
 import { DEFAULT_SIMULATION_DELAYS, PAYMENT_DELAYS } from './payment-simulation';
 import { WebhooksCoreModule } from '../webhooks/webhooks-core.module';
@@ -30,9 +31,14 @@ import { PaymentsService } from './payments.service';
  * commit. The dependency is one-directional — the webhooks module never imports
  * the payments module for this purpose (it derives the catalog from the constant
  * in `payment-events.ts`), and only the *worker* composition root imports both.
+ *
+ * AuditLoggingCoreModule (phase 12 §4.1) supplies the audit capture port:
+ * `payment.created` and the terminal transitions are written inside the same
+ * transaction as the payment (§6.2, D7), so a committed payment always has its
+ * entry and a rolled-back one has none.
  */
 @Module({
-  imports: [ApiKeysModule, IdempotencyModule, WebhooksCoreModule],
+  imports: [ApiKeysModule, IdempotencyModule, WebhooksCoreModule, AuditLoggingCoreModule],
   controllers: [PaymentsController],
   providers: [
     PaymentsService,

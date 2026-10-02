@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../generated/prisma/client';
 
+import { AUDIT_LOG_PORT, type AuditLogPort } from '../audit-logging/audit-log.port';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
 import { uuidv7 } from '../common/uuid/uuid';
@@ -47,6 +48,7 @@ export class AuthService {
     private readonly tokens: TokenService,
     private readonly refreshSessions: RefreshSessionService,
     private readonly config: ConfigService,
+    @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
   ) {}
 
   get expiresIn(): number {
@@ -57,8 +59,13 @@ export class AuthService {
    * Registration (D4): user + default personal organization (ADR-0010) +
    * `owner` membership + first refresh session, all in one transaction. Also
    * issues the first access token. Atomic: any failure rolls back everything.
+   *
+   * Phase 12 §5.2/§6.2: `user.registered` is written **inside** the same
+   * transaction (it is the one auth event that has one, D7), and its D4
+   * membership fan-out reads the membership created just above — typically one
+   * entry for the default organization.
    */
-  async register(input: RegisterInput): Promise<AuthResult> {
+  async register(input: RegisterInput, requestId?: string): Promise<AuthResult> {
     const email = this.normalizeEmail(input.email);
     const name = this.cleanName(input.name);
 
@@ -108,6 +115,13 @@ export class AuthService {
           },
         });
         userId = user.id;
+        // Phase 12 §5.2: committed inside the registration transaction — a
+        // user can never exist without their audit entry (fail-closed, D7).
+        await this.audit.record(tx, {
+          action: 'user.registered',
+          user_id: user.id,
+          request_id: requestId ?? null,
+        });
         session = await this.refreshSessions.createForUserInTransaction(tx, user.id, now);
       });
     } catch (error) {
@@ -129,17 +143,38 @@ export class AuthService {
     };
   }
 
-  async login(input: LoginInput): Promise<AuthResult> {
+  async login(input: LoginInput, requestId?: string): Promise<AuthResult> {
     const email = this.normalizeEmail(input.email);
     const user = await this.prisma.user.findUnique({ where: { email } });
 
     // Unknown email and wrong password get the identical generic response so
     // the endpoint cannot be used to enumerate accounts (phase 3 §4.2, §7.4).
-    if (!user || !(await this.password.verify(user.passwordHash, input.password))) {
+    if (!user) {
+      // Phase 12 §5.2/D4: an unknown address records **no** entry — the
+      // presented email is third-party PII (D13) and there is no user to
+      // attribute it to. The response is identical either way.
+      throw GENERIC_LOGIN_ERROR;
+    }
+    if (!(await this.password.verify(user.passwordHash, input.password))) {
+      // Known account, wrong password: the archetypal auth security event
+      // (§5.2). Recorded best-effort — a failed audit write never changes the
+      // 401 outcome, its body or its headers (D7).
+      await this.audit.captureAuth({
+        action: 'user.login_failed',
+        user_id: user.id,
+        request_id: requestId ?? null,
+      });
       throw GENERIC_LOGIN_ERROR;
     }
 
     const session = await this.refreshSessions.createForUser(user.id);
+
+    // §5.2: a successful login (a refresh session was created), best-effort.
+    await this.audit.captureAuth({
+      action: 'user.logged_in',
+      user_id: user.id,
+      request_id: requestId ?? null,
+    });
 
     return {
       accessToken: this.tokens.signAccessToken(user.id),
@@ -169,8 +204,20 @@ export class AuthService {
     };
   }
 
-  async logout(token: string): Promise<void> {
-    await this.refreshSessions.revoke(token);
+  async logout(token: string, requestId?: string): Promise<void> {
+    const userId = await this.refreshSessions.revoke(token);
+
+    // Phase 12 §5.2: `user.logged_out` only when a valid session was actually
+    // revoked; a rejected logout (no authenticated actor) records nothing.
+    // Best-effort like the other outcome events (D7) — the cookie is cleared
+    // and 204 returned regardless.
+    if (userId) {
+      await this.audit.captureAuth({
+        action: 'user.logged_out',
+        user_id: userId,
+        request_id: requestId ?? null,
+      });
+    }
   }
 
   private normalizeEmail(value: string): string {

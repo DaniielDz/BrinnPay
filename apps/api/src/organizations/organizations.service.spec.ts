@@ -73,6 +73,7 @@ const ACTOR_EMAIL = 'dev@example.com';
 
 describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
   let service: OrganizationsService;
+  let audit: { record: jest.Mock; captureAuth: jest.Mock };
   let prisma: {
     organization: { findMany: jest.Mock; findUnique: jest.Mock; create: jest.Mock; update: jest.Mock; delete: jest.Mock };
     organizationMember: {
@@ -106,9 +107,19 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
       organizationMember: { create: jest.fn() },
       invitation: { updateMany: jest.fn() },
     };
-    prisma.$transaction.mockImplementation(async (fn: (tx: typeof txn) => Promise<unknown>) => fn(txn));
+    prisma.$transaction.mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+    // The transaction handle aliases the same model mocks, so assertions keep
+    // inspecting `prisma.<model>` for statements the service now runs inside
+    // its (phase 12 §6.2) transaction; `txn` stays as the handle name the
+    // existing expectations already use.
+    txn = {
+      organization: prisma.organization,
+      organizationMember: prisma.organizationMember,
+      invitation: prisma.invitation,
+    };
 
-    service = new OrganizationsService(prisma as unknown as PrismaService);
+    audit = { record: jest.fn(async () => undefined), captureAuth: jest.fn() };
+    service = new OrganizationsService(prisma as unknown as PrismaService, audit as never);
   });
 
   describe('organizations.create (§4.2, D7)', () => {
@@ -193,6 +204,17 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
       expect(prisma.organizationMember.count).toHaveBeenCalledWith(
         expect.objectContaining({ where: expect.objectContaining({ role: 'owner' }) }),
       );
+      // Phase 12 §5.3: the role change and its entry share one transaction.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'member.role_changed',
+        organization_id: ORG_ID,
+        actor: { type: 'user', id: 'user-1' },
+        member_user_id: 'user-2',
+        previous_role: 'owner',
+        new_role: 'admin',
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
     });
 
     it('admin cannot modify an owner member → 403', async () => {
@@ -200,6 +222,8 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
       await expect(
         service.updateMember(ORG_ID, membership('admin'), 'user-2', 'member'),
       ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+      // Authorization precedes the write path — no entry (AC4).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('admin cannot grant the owner role → 403', async () => {
@@ -273,6 +297,16 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
       prisma.organizationMember.delete.mockResolvedValue({ id: 'member-1' });
 
       await expect(service.removeMember(ORG_ID, membership('owner'), 'user-2')).resolves.toBeUndefined();
+      // The entry keeps the removed member's plain id and role (§6.1/D8).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'member.removed',
+        organization_id: ORG_ID,
+        actor: { type: 'user', id: 'user-1' },
+        member_user_id: 'user-2',
+        role: 'member',
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
     });
 
     it('admin cannot remove an owner member → 403', async () => {
@@ -319,6 +353,18 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
           data: expect.objectContaining({ email: 'guest@example.com', status: 'pending' }),
         }),
       );
+      // Phase 12 §5.3/D13: the entry carries role + invitation id + request id
+      // — never the invited email (third-party PII).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'invitation.created',
+        organization_id: ORG_ID,
+        actor: { type: 'user', id: 'user-1' },
+        invitation_id: 'inv-1',
+        role: 'member',
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain('guest@example.com');
     });
 
     it('admin cannot invite an owner → 403', async () => {
@@ -359,23 +405,35 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
   describe('cancelInvitation (§4.2 cancelInvitation, D5)', () => {
     it('cancels a pending invitation and records canceled_at', async () => {
       prisma.invitation.findUnique.mockResolvedValue(invitationRow({ status: 'pending' }));
-      await expect(service.cancelInvitation(ORG_ID, 'inv-1')).resolves.toBeUndefined();
+      await expect(service.cancelInvitation(ORG_ID, 'inv-1', membership('owner'))).resolves.toBeUndefined();
       expect(prisma.invitation.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ status: 'canceled', canceledAt: expect.any(Date) }),
         }),
       );
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'invitation.canceled',
+        organization_id: ORG_ID,
+        actor: { type: 'user', id: 'user-1' },
+        invitation_id: 'inv-1',
+        role: 'member',
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain('guest@example.com');
     });
 
     it('cancel-canceled is an idempotent no-op (204)', async () => {
       prisma.invitation.findUnique.mockResolvedValue(invitationRow({ status: 'canceled' }));
-      await expect(service.cancelInvitation(ORG_ID, 'inv-1')).resolves.toBeUndefined();
+      await expect(service.cancelInvitation(ORG_ID, 'inv-1', membership('owner'))).resolves.toBeUndefined();
       expect(prisma.invitation.update).not.toHaveBeenCalled();
+      // Nothing changed, so nothing is recorded (§4.2 rule 6).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('canceling an accepted invitation → 422', async () => {
       prisma.invitation.findUnique.mockResolvedValue(invitationRow({ status: 'accepted' }));
-      await expect(service.cancelInvitation(ORG_ID, 'inv-1')).rejects.toMatchObject({
+      await expect(service.cancelInvitation(ORG_ID, 'inv-1', membership('owner'))).rejects.toMatchObject({
         code: 'BUSINESS_RULE_VIOLATION',
         status: 422,
       });
@@ -383,7 +441,7 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
 
     it('an invitation of another organization → 404', async () => {
       prisma.invitation.findUnique.mockResolvedValue(invitationRow({ organizationId: 'other-org' }));
-      await expect(service.cancelInvitation(ORG_ID, 'inv-1')).rejects.toMatchObject({
+      await expect(service.cancelInvitation(ORG_ID, 'inv-1', membership('owner'))).rejects.toMatchObject({
         code: 'NOT_FOUND',
         status: 404,
       });
@@ -416,6 +474,19 @@ describe('OrganizationsService (phase 4 §4.2, D4/D5/D7/D9)', () => {
         }),
       );
       expect(result).toMatchObject({ user_id: 'user-1', role: 'admin' });
+      // Phase 12 §5.3: membership + `member.joined` entry in one transaction;
+      // the actor is the joining user (self), and no email is recorded (D13).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'member.joined',
+        organization_id: ORG_ID,
+        actor: { type: 'user', id: 'user-1' },
+        member_user_id: 'user-1',
+        role: 'admin',
+        invitation_id: 'inv-1',
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain(ACTOR_EMAIL);
     });
 
     it('hides the invitation from a non-matching email → 404', async () => {

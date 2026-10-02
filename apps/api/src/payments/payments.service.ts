@@ -1,8 +1,11 @@
 import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 
+import { AUDIT_LOG_PORT, type AuditLogPort } from '../audit-logging/audit-log.port';
+import type { AuditEnvironment } from '../audit-logging/audit-actions';
+import { actorOfScope, organizationIdOfScope } from '../audit-logging/audit-scope';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
-import { isUsd, parseAmountMinor } from '../common/money/money';
+import { formatAmountMinor, isUsd, parseAmountMinor } from '../common/money/money';
 import { uuidv7 } from '../common/uuid/uuid';
 import {
   PAYMENTS_CREATE_SCOPE,
@@ -85,6 +88,11 @@ type EdgeOutcome = 'applied' | 'lost' | 'rolled-back';
  * - the advancement sweep entry point (phase 10 D3/F2): `advanceDuePayments`
  *   applies the same CAS-guarded edges a read would, so a terminal event fires
  *   without anybody reading the payment.
+ * - audit capture (phase 12 §5.4/§6.2): `payment.created` and each terminal
+ *   transition are written inside the same transaction as the change, through
+ *   the audit module's port — a committed payment always has its entry, and a
+ *   replay or a rollback writes none. Terminal edges are attributed to the
+ *   payment's original creator (D5) with no `request_id` (AC6).
  */
 @Injectable()
 export class PaymentsService {
@@ -95,6 +103,7 @@ export class PaymentsService {
     @Inject(WEBHOOK_EVENT_PORT) private readonly events: WebhookEventPort,
     @Inject(PAYMENT_DELAYS) private readonly delays: SimulationDelays,
     private readonly idempotency: IdempotencyService,
+    @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
   ) {}
 
   /** List (§4.2): cursor-paginated payments of one project environment. The
@@ -193,6 +202,22 @@ export class PaymentsService {
         // a replayed create emits nothing (§4.3.4).
         const event = this.paymentEvent('payment.created', payment, now, requestId);
         await this.events.persist(tx, event);
+
+        // Phase 12 §5.4/§6.2: the `payment.created` entry joins the same
+        // transaction, so no payment can commit without it (fail-closed, D7)
+        // and a replay writes no second entry (§4.2 rule 6). Organization and
+        // actor come from the guard-resolved scope — never from the body.
+        await this.audit.record(tx, {
+          action: 'payment.created',
+          organization_id: organizationIdOfScope(scope),
+          actor: actorOfScope(scope),
+          project_id: scope.project_id,
+          environment,
+          payment_id: payment.id,
+          amount: formatAmountMinor(payment.amountMinor),
+          currency: payment.currency,
+          request_id: requestId ?? null,
+        });
 
         return {
           status: HttpStatus.CREATED,
@@ -502,6 +527,25 @@ export class PaymentsService {
             const event = this.paymentEvent(transition.event, updated, now);
             eventId = event.id;
             await this.events.persist(tx, event);
+            // Phase 12 §5.4/§6.2: the terminal entry joins the CAS
+            // transaction, so an edge and its entry commit or roll back
+            // together. No `request_id`: the edge is applied by the worker
+            // sweep or a read-time catch-up, and D5 attributes it to the
+            // payment's original creator — never to whoever triggered the
+            // pass (AC6).
+            const terminal = {
+              project_id: current.projectId,
+              environment: current.environment as AuditEnvironment,
+              payment_id: current.id,
+              amount: formatAmountMinor(current.amountMinor),
+              currency: current.currency,
+            };
+            await this.audit.record(
+              tx,
+              transition.event === 'payment.succeeded'
+                ? { action: 'payment.succeeded', ...terminal }
+                : { action: 'payment.failed', ...terminal, failure_code: current.failureCode },
+            );
           }
         },
         // The fan-out inserts one delivery per subscribed endpoint, so this

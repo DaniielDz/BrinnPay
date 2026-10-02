@@ -15,6 +15,7 @@ const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
 const OTHER_PROJECT_ID = '0192f2a0-0000-7000-8000-0000000000ff';
 const CUSTOMER_ID = '0192f2a0-0000-7000-8000-00000000000c';
 const PAYMENT_ID = '0192f2a0-0000-7000-8000-00000000000d';
+const USER_ID = '0192f2a0-0000-7000-8000-00000000000e';
 
 /** Far enough in the past that both simulation edges are due with the default
  *  delays (relative to the machine clock — deterministic at any run time). */
@@ -27,6 +28,7 @@ function sessionScope(projectId: string = PROJECT_ID): PaymentsScope {
     mode: 'session',
     project: { project_id: projectId, organization_id: 'org-1' },
     project_id: projectId,
+    user_id: USER_ID,
   };
 }
 
@@ -121,22 +123,40 @@ function idempotencyStub(prisma: unknown): IdempotencyStub {
   return { execute, requests };
 }
 
+/**
+ * Test double for the audit module's inbound port (phase 12 §4.1): records the
+ * capture the payments module hands over. The port's own guarantees (scope
+ * resolution, allowlist, transactional insert) are proved in
+ * `src/audit-logging/audit-logging.service.spec.ts`.
+ */
+interface AuditPort {
+  record: jest.Mock;
+  captureAuth: jest.Mock;
+}
+
+function makeAuditPort(): AuditPort {
+  return { record: jest.fn(async () => undefined), captureAuth: jest.fn() };
+}
+
 function setup(prisma: unknown, delays: SimulationDelays = DEFAULT_SIMULATION_DELAYS): {
   service: PaymentsService;
   /** The port double; also aliased as `sink` for the event assertions below. */
   port: Port;
   sink: Port;
+  audit: AuditPort;
   idempotency: IdempotencyStub;
 } {
   const port = makePort();
+  const audit = makeAuditPort();
   const idempotency = idempotencyStub(prisma);
   const service = new PaymentsService(
     prisma as unknown as PrismaService,
     port as unknown as PaymentsService['events'],
     delays,
     idempotency as unknown as PaymentsService['idempotency'],
+    audit as unknown as PaymentsService['audit'],
   );
-  return { service, port, sink: port, idempotency };
+  return { service, port, sink: port, audit, idempotency };
 }
 
 /**
@@ -169,6 +189,7 @@ function setupWithRealIdempotency(prisma: Record<string, unknown>) {
     new IdempotencyService(client as unknown as PrismaService, {
       retentionMs: DEFAULT_IDEMPOTENCY_RETENTION_MS,
     }),
+    makeAuditPort() as unknown as PaymentsService['audit'],
   );
   return { service, port, sink: port, idempotencyRecord, client };
 }
@@ -304,7 +325,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         createdAt: data.createdAt,
         updatedAt: data.updatedAt,
       }));
-      const { service, sink } = setup(prisma);
+      const { service, sink, audit } = setup(prisma);
 
       const { body: payment } = await service.create(
         sessionScope(),
@@ -335,6 +356,22 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         project_id: PROJECT_ID,
       });
       expect(event.data).toMatchObject({ id: expect.any(String), status: 'pending' });
+      // Phase 12 §5.4/AC5: the entry joined the same transaction — scope and
+      // actor come from the guard-resolved session scope, never the body.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'payment.created',
+        organization_id: 'org-1',
+        actor: { type: 'user', id: USER_ID },
+        project_id: PROJECT_ID,
+        environment: 'test',
+        payment_id: payment.id,
+        amount: '10.00',
+        currency: 'usd',
+      });
+      // The double hands the callback the same client, so the entry was
+      // recorded through the very handle the mutation ran on (D7).
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
     });
 
     it('api-key mode: requires the body environment to equal the key environment (422)', async () => {
@@ -503,6 +540,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         port as unknown as PaymentsService['events'],
         DEFAULT_SIMULATION_DELAYS,
         idempotency as unknown as PaymentsService['idempotency'],
+        makeAuditPort() as unknown as PaymentsService['audit'],
       );
 
       await service.create(
@@ -543,6 +581,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         port as unknown as PaymentsService['events'],
         DEFAULT_SIMULATION_DELAYS,
         idempotency as unknown as PaymentsService['idempotency'],
+        makeAuditPort() as unknown as PaymentsService['audit'],
       );
 
       const result = await service.create(
@@ -693,7 +732,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       prisma.payment.findFirst.mockResolvedValue(paymentRow({ status: 'pending' }));
       prisma.payment.updateMany.mockResolvedValue({ count: 1 });
       prisma.payment.findUnique.mockResolvedValue(paymentRow({ status: 'succeeded' }));
-      const { service, sink } = setup(prisma);
+      const { service, sink, audit } = setup(prisma);
 
       await expect(service.retrieve(sessionScope(), PAYMENT_ID)).resolves.toMatchObject({
         status: 'succeeded',
@@ -704,6 +743,18 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         expect.objectContaining({ type: 'payment.succeeded' }),
       );
       expect(sink.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.created' }));
+      // Phase 12 §5.4 (D5): the terminal edge shares the edge transaction and
+      // carries no request correlation (background, AC6).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'payment.succeeded',
+        project_id: PROJECT_ID,
+        environment: 'test',
+        payment_id: PAYMENT_ID,
+        amount: '10.00',
+        currency: 'usd',
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
     });
 
     it('rolls back the edge when its event cannot be persisted, so the next pass retries it (D2)', async () => {

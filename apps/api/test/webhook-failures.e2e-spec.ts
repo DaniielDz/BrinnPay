@@ -15,6 +15,7 @@ import { WEBHOOK_JOBS, WEBHOOK_QUEUE_NAME } from '../src/webhooks/webhook-queue'
 import { parseRedisUrl, REQUEUE_GRACE_MS } from '../src/webhooks/webhook-queue.service';
 import { WebhookMaintenanceService } from '../src/webhooks/webhook-maintenance.service';
 import { WebhooksWorkerModule } from '../src/webhooks/webhooks-worker.module';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 10 delivery failure-mode e2e (§9.5/§9.6, §10, D5/D6).
@@ -140,7 +141,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
     received.length = 0;
     responders.clear();
     attemptCounts.clear();
-    if (!available) return;
+    requireDependencies(available);
     await queue.resume();
     const projects = await prisma.project.findMany({
       where: { organization: { name: { startsWith: 'whf-', endsWith: `-${stamp}` } } },
@@ -226,7 +227,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
     });
 
   it('runs the full retry ladder: fail, fail, succeed — same bytes, incrementing attempt header (D5)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('ladder');
 
     responders.set('/ladder', (res) => {
@@ -261,7 +262,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
   });
 
   it('honors Retry-After on a 429, clamped, and still delivers (D6)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('retry-after');
 
     responders.set('/retry-after', (res) => {
@@ -290,7 +291,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
   });
 
   it('does not retry a 404: one attempt, terminal failed, schedule cleared (D6)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('not-found');
 
     responders.set('/missing', (res) => {
@@ -314,7 +315,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
   });
 
   it('times out a hung destination, then redelivers after the timeout (D5/§5.4)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('timeout');
 
     responders.set('/slow', (res) => {
@@ -339,7 +340,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
   });
 
   it('persists the event when the enqueue is lost and reconciliation re-queues it (AC8, D2)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('reconcile');
 
     const endpoint = await subscribe(token, endpointsUrl, '/reconciled');
@@ -404,7 +405,7 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
   });
 
   it('recovers a stranded delivery whose event is older than the reconciliation horizon (AC8, D2)', async () => {
-    if (!available) return;
+    requireDependencies(available);
     const { token, projectId, customerId, endpointsUrl } = await setup('beyond-horizon');
 
     responders.set('/beyond-horizon', (res) => {

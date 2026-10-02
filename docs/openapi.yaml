@@ -1757,7 +1757,32 @@ paths:
       summary: List audit logs of an organization
       description: |
         Lists the immutable audit log entries of an organization with cursor
-        pagination (Phase 12).
+        pagination (Phase 12). Entries answer *who did what, to which
+        resource, when* for security-relevant and business-relevant events.
+
+        Authority is **session-only**: an API key (`sk_test_...`/`sk_live_...`)
+        never reads audit logs and is rejected with `401`. Members of the
+        addressed organization holding the `logs.read` capability (every role:
+        owner, admin, member, viewer) receive `200`; an unknown or foreign
+        `organization_id` is `404`, so organization existence is never
+        disclosed, and a member without the capability is `403`.
+
+        Scope is **organization-wide**: the list covers every project of the
+        organization and both environments (`test` and `live`); entries carry
+        nullable `project_id`/`environment` columns so project-scoped actions
+        can be attributed. Ordering is **ascending by UUIDv7**, matching every
+        other list; pages are stable and non-overlapping. `limit` defaults to
+        `20` and may not exceed `100`. There are no filters beyond pagination —
+        no action, resource or time-range selection.
+
+        Entries are **append-only**: they are never updated or deleted through
+        this or any other operation (phase 1 §8), and are removed only when
+        their organization is deleted. `action` is one of the catalog values
+        documented on the schema; `data` holds only bounded, allowlisted
+        scalars (ids, roles, monetary amounts, the optional `request_id`
+        correlation key) — never secrets, emails, headers, bodies or free text.
+
+        Reading this list produces no audit entry of its own.
       security:
         - SessionAuth: []
       parameters:
@@ -3148,30 +3173,88 @@ components:
         [id, organization_id, actor_type, action, resource_type, created_at]
       description: |
         Immutable security/business event record (Phase 12). Entries are
-        append-only and never updated or deleted (phase 1 §8).
+        append-only: no operation updates or deletes one (phase 1 §8), and the
+        database rejects `UPDATE` outright; the only deletion path is the
+        cascade that removes an organization's entries with the organization
+        itself. `organization_id` is always present — there is no
+        platform-global or null-organization entry.
       properties:
         id:
           type: string
           format: uuid
+          description: UUIDv7 identifier; also the ascending list-order key.
         organization_id:
           type: string
           format: uuid
+          description: Owning organization. The entry is scoped to exactly one.
         actor_type:
           type: string
           enum: [user, api_key]
+          description: |
+            Who acted. Session-driven and authentication actions are `user`;
+            API-key-driven actions are `api_key` (the key's identifier, never
+            its plaintext). Background payment transitions are attributed to
+            the payment's original creator.
         actor_id:
           type: [string, "null"]
+          description: |
+            Identifier of the acting user or API key, or `null` when no actor
+            is representable. A plain historical value with no foreign key —
+            it survives the actor's deletion and is never a secret.
         action:
           type: string
-          description: Machine-readable action identifier.
+          description: |
+            Machine-readable action identifier, `<resource>.<past-tense-verb>`.
+            One of the closed Phase 12 catalog:
+
+            * Authentication: `user.registered`, `user.logged_in`,
+              `user.login_failed`, `user.logged_out`
+            * Access control: `invitation.created`, `invitation.canceled`,
+              `member.joined`, `member.role_changed`, `member.removed`
+            * Payments/refunds: `payment.created`, `payment.succeeded`,
+              `payment.failed`, `refund.created`
+            * API keys/customers: `api_key.created`, `api_key.revoked`,
+              `customer.created`, `customer.updated`, `customer.deleted`
+
+            The property stays an open string so the catalog can grow without
+            a breaking change; new values are documented here.
         resource_type:
           type: string
+          description: |
+            Type of the affected resource. One of `user`, `member`,
+            `invitation`, `api_key`, `payment`, `refund`, `customer` —
+            always paired with a catalog `action` that implies it.
         resource_id:
           type: [string, "null"]
+          description: |
+            Identifier of the affected resource, or `null` when none applies.
+            A plain historical value with no foreign key: deleting a
+            membership, key or resource leaves the reference intact.
+        project_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            Project the action belongs to (nullable, additive), present for
+            project-scoped actions and `null` for organization- or
+            user-scoped ones. A plain value with no foreign key.
+        environment:
+          type: [string, "null"]
+          enum: [test, live, null]
+          description: |
+            Environment of the action (nullable, additive): `test`/`live` for
+            project-scoped actions, `null` otherwise.
         data:
           type: object
           additionalProperties: true
-          description: Optional structured context. Never contains secrets.
+          description: |
+            Optional structured context, composed from a per-action allowlist
+            of bounded scalars only (ids, roles, status values, monetary
+            amounts as decimal strings, and the optional `request_id` of the
+            triggering request for cross-reference into request logs). Omitted
+            when the allowlist yields nothing. Never contains secrets,
+            passwords, API-key plaintext, tokens, webhook secrets,
+            `Idempotency-Key` values, emails, IP addresses, user agents,
+            headers, request/response bodies or free text.
         created_at:
           type: string
           format: date-time

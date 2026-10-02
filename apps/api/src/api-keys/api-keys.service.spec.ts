@@ -11,7 +11,16 @@ function knownError(code: string): Prisma.PrismaClientKnownRequestError {
 }
 
 const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
+const ORGANIZATION_ID = '0192f2a0-0000-7000-8000-00000000000a';
+const USER_ID = '0192f2a0-0000-7000-8000-00000000000d';
 const KEY_ID = '0192f2a0-0000-7000-8000-00000000000c';
+
+const PROJECT = { project_id: PROJECT_ID, organization_id: ORGANIZATION_ID };
+/** Phase 12 §5.5: session-only routes attribute the entry to the acting user. */
+const AUDIT_CONTEXT = {
+  actor: { type: 'user' as const, id: USER_ID },
+  request_id: 'req_0192f2a0000070008000000000000001',
+};
 
 function keyRow(overrides: Partial<{
   id: string;
@@ -34,13 +43,23 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
   let service: ApiKeysService;
   let prisma: {
     apiKey: { findMany: jest.Mock; findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
+    $transaction: jest.Mock;
   };
+  let audit: { record: jest.Mock; captureAuth: jest.Mock };
 
   beforeEach(() => {
     prisma = {
       apiKey: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+      // The mutation and its audit entry share one transaction (phase 12 §6.2);
+      // the double hands the callback the same client, so the assertions below
+      // keep inspecting the model mocks directly.
+      $transaction: jest.fn(),
     };
-    service = new ApiKeysService(prisma as unknown as PrismaService);
+    prisma.$transaction.mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    audit = { record: jest.fn(async () => undefined), captureAuth: jest.fn() };
+    service = new ApiKeysService(prisma as unknown as PrismaService, audit as never);
   });
 
   describe('list (§4.2, D5)', () => {
@@ -100,7 +119,7 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
         createdAt: new Date(),
       }));
 
-      const result = await service.create(PROJECT_ID, 'live');
+      const result = await service.create(PROJECT, 'live', AUDIT_CONTEXT);
 
       const { key, ...meta } = result;
       expect(key).toMatch(/^sk_live_[A-Za-z0-9_-]{43}$/);
@@ -118,6 +137,22 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
       };
       expect(createCall.data.keyHash).toBe(hashApiKey(key));
       expect(createCall.data).not.toHaveProperty('key');
+
+      // Phase 12 §5.5: the entry shares the creation transaction, is attributed
+      // to the acting user from guard-resolved context, and carries no secret.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'api_key.created',
+        organization_id: ORGANIZATION_ID,
+        actor: { type: 'user', id: USER_ID },
+        project_id: PROJECT_ID,
+        environment: 'live',
+        api_key_id: KEY_ID,
+        request_id: AUDIT_CONTEXT.request_id,
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain(key);
+      expect(JSON.stringify(audit.record.mock.calls[0][1])).not.toContain('hash');
     });
 
     it('creates a test-scoped key when environment=test', async () => {
@@ -129,7 +164,7 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
         createdAt: new Date(),
       }));
 
-      const result = await service.create(PROJECT_ID, 'test');
+      const result = await service.create(PROJECT, 'test', AUDIT_CONTEXT);
 
       expect(result.key.startsWith('sk_test_')).toBe(true);
       expect(result.environment).toBe('test');
@@ -141,23 +176,37 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
       prisma.apiKey.findUnique.mockResolvedValue(keyRow({ revokedAt: null }));
       prisma.apiKey.update.mockResolvedValue(keyRow({ revokedAt: new Date() }));
 
-      await expect(service.revoke(PROJECT_ID, KEY_ID)).resolves.toBeUndefined();
+      await expect(service.revoke(PROJECT, KEY_ID, AUDIT_CONTEXT)).resolves.toBeUndefined();
 
       expect(prisma.apiKey.update).toHaveBeenCalledWith({
         where: { id: KEY_ID },
         data: { revokedAt: expect.any(Date) },
       });
+      // Phase 12 §5.5: revocation is audited in the same transaction.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record.mock.calls[0][1]).toMatchObject({
+        action: 'api_key.revoked',
+        organization_id: ORGANIZATION_ID,
+        actor: { type: 'user', id: USER_ID },
+        project_id: PROJECT_ID,
+        environment: 'test',
+        api_key_id: KEY_ID,
+        request_id: AUDIT_CONTEXT.request_id,
+      });
+      expect(audit.record.mock.calls[0][0]).toBe(prisma);
     });
 
     it('is idempotent: revoking an already-revoked key is a no-op (no update)', async () => {
       prisma.apiKey.findUnique.mockResolvedValue(keyRow({ revokedAt: new Date() }));
 
-      await expect(service.revoke(PROJECT_ID, KEY_ID)).resolves.toBeUndefined();
+      await expect(service.revoke(PROJECT, KEY_ID, AUDIT_CONTEXT)).resolves.toBeUndefined();
       expect(prisma.apiKey.update).not.toHaveBeenCalled();
+      // A no-op mutation writes no entry (§4.2 rule 6 — one row per event).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it.each(['not-a-uuid', ''])('rejects a malformed api_key_id (%s) with 404 without querying', async (id) => {
-      await expect(service.revoke(PROJECT_ID, id)).rejects.toMatchObject({
+      await expect(service.revoke(PROJECT, id, AUDIT_CONTEXT)).rejects.toMatchObject({
         code: 'NOT_FOUND',
         status: 404,
       });
@@ -167,16 +216,18 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
     it('rejects an unknown key with 404', async () => {
       prisma.apiKey.findUnique.mockResolvedValue(null);
 
-      await expect(service.revoke(PROJECT_ID, KEY_ID)).rejects.toMatchObject({
+      await expect(service.revoke(PROJECT, KEY_ID, AUDIT_CONTEXT)).rejects.toMatchObject({
         code: 'NOT_FOUND',
         status: 404,
       });
+      // A rejected mutation never reaches the write path — no entry (AC4).
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('rejects a cross-project key with the same 404 (no disclosure)', async () => {
       prisma.apiKey.findUnique.mockResolvedValue(keyRow({ projectId: '0192f2a0-0000-7000-8000-0000000000ff' }));
 
-      await expect(service.revoke(PROJECT_ID, KEY_ID)).rejects.toMatchObject({
+      await expect(service.revoke(PROJECT, KEY_ID, AUDIT_CONTEXT)).rejects.toMatchObject({
         code: 'NOT_FOUND',
         status: 404,
       });
@@ -187,7 +238,7 @@ describe('ApiKeysService (phase 5 §4.2, D4/D5)', () => {
       prisma.apiKey.findUnique.mockResolvedValue(keyRow({ revokedAt: null }));
       prisma.apiKey.update.mockRejectedValue(knownError('P2025'));
 
-      await expect(service.revoke(PROJECT_ID, KEY_ID)).rejects.toMatchObject({
+      await expect(service.revoke(PROJECT, KEY_ID, AUDIT_CONTEXT)).rejects.toMatchObject({
         code: 'NOT_FOUND',
         status: 404,
       });

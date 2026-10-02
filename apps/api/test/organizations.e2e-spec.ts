@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { requireDependencies } from './support/db-e2e';
 
 /**
  * Phase 4 e2e (§9): organizations CRUD, RBAC member management, and the
@@ -106,7 +107,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   // -------------------------------------------------------------------------
 
   it('create: creator becomes owner and the organization is listed (§4.2)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token, user } = await register('create');
     const org = await createOrg(token, 'Acme Sandbox');
@@ -123,7 +124,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('create validates the name: empty and over-length → 400 (§4.2 D7)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
     const { token } = await register('namebounds');
 
     for (const name of ['   ', 'x'.repeat(201)]) {
@@ -134,7 +135,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('update: owner renames; viewer gets 403; non-member gets 404 (D1/D3)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('update-owner');
     const viewer = await register('update-viewer');
@@ -166,7 +167,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('delete: owner-only; subsequent access yields 404 for everyone (§4.2 D9)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('delete-owner');
     const admin = await register('delete-admin');
@@ -186,7 +187,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('tenant isolation: a non-member never learns an organization exists (D1)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { token } = await register('isolation');
     const org = await createOrg(token, 'Isolated Org');
@@ -233,7 +234,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   };
 
   it('members.list is readable by every role and exposes the user identity (§4.2 D8)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { owner, viewer, org } = await buildTeam();
 
@@ -253,7 +254,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('admin changes a member role but cannot touch owners or grant owner (§4.2 D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { member, viewer, admin, owner, org } = await buildTeam();
 
@@ -276,7 +277,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('owner changes any role, incl. another owner; last owner demotion → 422 (§4.2 D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { admin, owner, org } = await buildTeam();
 
@@ -308,7 +309,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('self-service: member self-demotion works, self-promotion is 403, self-removal works (§4.2 D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { member, org } = await buildTeam();
 
@@ -332,7 +333,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('member target restrictions: member cannot change another member (403) and unknown targets are 404 (§4.2 D4)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { member, owner, viewer, org } = await buildTeam();
 
@@ -353,7 +354,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   // -------------------------------------------------------------------------
 
   it('invite: creates a pending invitation with normalized email; conflicts → 409 (§4.2 D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('inv-create');
     const org = await createOrg(owner.token, 'Invite Org');
@@ -381,7 +382,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('invitations.create: admin may not invite owners (§4.2 D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const { admin, org } = await buildTeam();
     const deny = await auth(admin.token)
@@ -391,7 +392,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('accept: creates membership with the invited role; email binding and lifecycle (§4.2 D5/D6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('inv-accept-owner');
     const invitee = await register('inv-accept-invitee');
@@ -406,7 +407,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('accept: another user with the same email? no — email binding hides the invitation (§4.2 D6)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('inv-binding-owner');
     const invitee = await register('inv-binding-invitee');
@@ -425,7 +426,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('accept: consumed or cancelled invitations are 422 (non-pending); members cannot be invited again (§4.2 D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('inv-state-owner');
     const invitee = await register('inv-state-invitee');
@@ -457,7 +458,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('cancelInvitation: idempotent no-op; cross-org cancel is 404 (§4.2 D5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const ownerA = await register('inv-cancel-a');
     const ownerB = await register('inv-cancel-b');
@@ -481,7 +482,7 @@ describe('BrinnPay organizations (e2e, phase 4)', () => {
   });
 
   it('listInvitations pagination: cursor iteration covers pending and historical entries (§4.5)', async () => {
-    if (!reachable.value) return;
+    requireDependencies(reachable.value);
 
     const owner = await register('pag-owner');
     const org = await createOrg(owner.token, 'Pagination Org');

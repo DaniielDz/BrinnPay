@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
+import { AUDIT_LOG_PORT, type AuditLogPort } from '../audit-logging/audit-log.port';
+import type { AuditEnvironment } from '../audit-logging/audit-actions';
+import { actorOfScope, organizationIdOfScope } from '../audit-logging/audit-scope';
 import { Prisma } from '../../generated/prisma/client';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
@@ -68,7 +71,10 @@ function isPrismaError(error: unknown, code: string): boolean {
  */
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
+  ) {}
 
   /** List (§4.2): cursor-paginated customers of one project environment. */
   async list(
@@ -96,27 +102,46 @@ export class CustomersService {
    * immutable after creation. Session mode: `environment` is required in the
    * body (DTO-enforced); API-key mode: it must equal the key's environment
    * (else 422, D2). Emails are normalized and deliberately **not unique** (D1).
+   *
+   * Phase 12 §5.5/§6.2: the mutation runs in one transaction together with its
+   * `customer.created` entry, so neither can exist without the other (D7).
+   * `requestId` is the server-assigned id of the triggering request (§4.2 rule 8).
    */
-  async create(scope: CustomersScope, dto: CustomerCreateDto): Promise<CustomerResponse> {
+  async create(
+    scope: CustomersScope,
+    dto: CustomerCreateDto,
+    requestId?: string,
+  ): Promise<CustomerResponse> {
     const environment = this.resolveCreateEnvironment(scope, dto.environment);
     const email = this.normalizeEmail(dto.email);
     const name = dto.name === undefined ? null : this.validateName(dto.name);
     const metadata = dto.metadata ?? {};
 
     const now = new Date();
-    const customer = await this.prisma.customer.create({
-      data: {
-        id: uuidv7(),
-        projectId: scope.project_id,
+    return this.prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.create({
+        data: {
+          id: uuidv7(),
+          projectId: scope.project_id,
+          environment,
+          email,
+          name,
+          metadata: metadata as Prisma.InputJsonValue,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      await this.audit.record(tx, {
+        action: 'customer.created',
+        organization_id: organizationIdOfScope(scope),
+        actor: actorOfScope(scope),
+        project_id: scope.project_id,
         environment,
-        email,
-        name,
-        metadata: metadata as Prisma.InputJsonValue,
-        createdAt: now,
-        updatedAt: now,
-      },
+        customer_id: customer.id,
+        request_id: requestId ?? null,
+      });
+      return toCustomerResponse(customer);
     });
-    return toCustomerResponse(customer);
   }
 
   /** Retrieve (§4.2): scoped to the addressed project; an API key can only
@@ -131,11 +156,16 @@ export class CustomersService {
    * fields (or only equal values) is a no-op returning the current state;
    * `updated_at` advances only when a field actually changes. Clearing `name`
    * to `null` is not supported (D7).
+   *
+   * Phase 12 §5.5: only a change that actually writes a row records
+   * `customer.updated`; the no-op patch is not a catalog action (§4.2 rule 1).
+   * Changed field values are never echoed into `data` (D13).
    */
   async update(
     scope: CustomersScope,
     customerId: string,
     dto: CustomerUpdateDto,
+    requestId?: string,
   ): Promise<CustomerResponse> {
     const customer = await this.findScopedCustomer(scope, customerId);
 
@@ -150,21 +180,33 @@ export class CustomersService {
       JSON.stringify(nextMetadata) !== JSON.stringify(customer.metadata ?? {});
 
     if (!emailChanged && !nameChanged && !metadataChanged) {
-      // No-op patch returns the current state (no `updated_at` advance).
+      // No-op patch returns the current state (no `updated_at` advance, no
+      // audit entry — nothing committed).
       return toCustomerResponse(customer);
     }
 
     try {
-      const updated = await this.prisma.customer.update({
-        where: { id: customer.id },
-        data: {
-          ...(emailChanged ? { email: nextEmail } : {}),
-          ...(nameChanged ? { name: nextName } : {}),
-          ...(metadataChanged ? { metadata: nextMetadata as Prisma.InputJsonValue } : {}),
-          updatedAt: new Date(),
-        },
+      return await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.customer.update({
+          where: { id: customer.id },
+          data: {
+            ...(emailChanged ? { email: nextEmail } : {}),
+            ...(nameChanged ? { name: nextName } : {}),
+            ...(metadataChanged ? { metadata: nextMetadata as Prisma.InputJsonValue } : {}),
+            updatedAt: new Date(),
+          },
+        });
+        await this.audit.record(tx, {
+          action: 'customer.updated',
+          organization_id: organizationIdOfScope(scope),
+          actor: actorOfScope(scope),
+          project_id: scope.project_id,
+          environment: customer.environment as AuditEnvironment,
+          customer_id: customer.id,
+          request_id: requestId ?? null,
+        });
+        return toCustomerResponse(updated);
       });
-      return toCustomerResponse(updated);
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         // Deleted between the read and the update; the customer no longer exists.
@@ -183,8 +225,12 @@ export class CustomersService {
    * DB backstop — a race between the count and the delete surfaces as a
    * Prisma P2003, which is mapped to the same 422. Subsequent access yields
    * 404 for everyone.
+   *
+   * Phase 12 §5.5/§6.2: the delete and its `customer.deleted` entry share one
+   * transaction (D7); the entry's plain-id `resource_id` keeps referencing the
+   * deleted customer, which is exactly why no FK points at it (D8/§6.1).
    */
-  async delete(scope: CustomersScope, customerId: string): Promise<void> {
+  async delete(scope: CustomersScope, customerId: string, requestId?: string): Promise<void> {
     const customer = await this.findScopedCustomer(scope, customerId);
 
     const linked = await this.prisma.payment.count({ where: { customerId: customer.id } });
@@ -193,7 +239,18 @@ export class CustomersService {
     }
 
     try {
-      await this.prisma.customer.delete({ where: { id: customer.id } });
+      await this.prisma.$transaction(async (tx) => {
+        await tx.customer.delete({ where: { id: customer.id } });
+        await this.audit.record(tx, {
+          action: 'customer.deleted',
+          organization_id: organizationIdOfScope(scope),
+          actor: actorOfScope(scope),
+          project_id: scope.project_id,
+          environment: customer.environment as AuditEnvironment,
+          customer_id: customer.id,
+          request_id: requestId ?? null,
+        });
+      });
     } catch (error) {
       if (isPrismaError(error, 'P2025')) {
         // Deleted between the read and the delete; the customer no longer exists.

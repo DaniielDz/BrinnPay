@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import { useAuth } from '../../../../../../../components/auth/auth-provider';
 import {
@@ -69,6 +69,7 @@ export default function ProjectLogsRequestsPage() {
    *  change re-uses this component, so without this guard another project's
    *  rows could be shown for a frame — stale state is never displayed (§7). */
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const listGeneration = useRef(0);
 
   const [environmentFilter, setEnvironmentFilter] = useState<Environment | ''>('');
   const [requestIdInput, setRequestIdInput] = useState('');
@@ -101,6 +102,7 @@ export default function ProjectLogsRequestsPage() {
     if (!accessToken) return;
     let cancelled = false;
     setProjectView({ projectId, status: 'loading', project: null, message: null });
+    listGeneration.current += 1;
     void (async () => {
       try {
         const loaded = await retrieveProject(accessToken, projectId);
@@ -131,6 +133,7 @@ export default function ProjectLogsRequestsPage() {
     setListLoading(true);
     setListError(null);
     setCopiedId(null);
+    listGeneration.current += 1;
     void (async () => {
       try {
         const page: CursorPage<RequestLog> = await listRequestLogs(accessToken, projectId, query);
@@ -161,15 +164,18 @@ export default function ProjectLogsRequestsPage() {
     if (!accessToken || !nextCursor || listLoading) return;
     setListLoading(true);
     setListError(null);
+    const generation = listGeneration.current;
     try {
       const page = await listRequestLogs(accessToken, projectId, { ...query, cursor: nextCursor });
+      if (listGeneration.current !== generation) return;
       setRecords((current) => [...current, ...page.data]);
       setNextCursor(page.next_cursor);
       setHasMore(page.has_more);
     } catch (err) {
+      if (listGeneration.current !== generation) return;
       setListError(err instanceof Error ? err.message : 'Unable to load request logs');
     } finally {
-      setListLoading(false);
+      if (listGeneration.current === generation) setListLoading(false);
     }
   }
 
