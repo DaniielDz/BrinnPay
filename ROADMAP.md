@@ -227,11 +227,11 @@
 
 **Goal:** Protect the API with configurable rate limits.
 
-- [ ] IP-based rate limiting
-- [ ] API key-based rate limiting
-- [ ] Endpoint-specific limits
-- [ ] Rate limit headers
-- [ ] Rate limit behavior documented in developer documentation
+- [x] IP-based rate limiting
+- [x] API key-based rate limiting
+- [x] Endpoint-specific limits
+- [x] Rate limit headers
+- [x] Rate limit behavior documented in developer documentation
 
 ---
 

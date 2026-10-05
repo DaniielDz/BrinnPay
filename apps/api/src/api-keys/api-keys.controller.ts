@@ -20,6 +20,7 @@ import { RequireCapability } from '../organizations/org-rbac.guard';
 import { ProjectRbacGuard } from '../projects/project-rbac.guard';
 import { CurrentProject, type ResolvedProject } from '../projects/request-project';
 import { resolveRequestId } from '../request-id/request-id';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import {
   ApiKeysService,
   type ApiKeyCreatedResponse,
@@ -41,6 +42,7 @@ export class ApiKeysController {
   constructor(private readonly apiKeys: ApiKeysService) {}
 
   @Get()
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'apiKeys.read' })
   list(
@@ -51,6 +53,7 @@ export class ApiKeysController {
   }
 
   @Post()
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'apiKeys.create' })
@@ -68,6 +71,7 @@ export class ApiKeysController {
   }
 
   @Delete(':api_key_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'apiKeys.revoke' })

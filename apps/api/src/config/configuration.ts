@@ -1,3 +1,5 @@
+import { BlockList, isIP } from 'node:net';
+
 import {
   canonicalizeWebhookHost,
 } from '../webhooks/webhook-url';
@@ -102,7 +104,51 @@ export interface BrinnPayConfig {
     /** How often the retention cleanup pass runs, in ms (D5). */
     cleanupIntervalMs: number;
   };
+  /**
+   * Rate limiting (phase 13 §5/§6.2). Every number is a configured value so
+   * tests, the sandbox, staging and production can differ without a rebuild
+   * (D6). The `auth.*` classes keep their Phase 3 values in `auth.rateLimits`
+   * under their unchanged `AUTH_RATE_LIMIT_*` names (D9) — this section only
+   * owns what did not exist before. No secret is involved: rate-limit
+   * configuration is non-secret operational tuning.
+   */
+  rateLimit: {
+    /** Window shared by the generic `read` and `write` classes (§6.2). */
+    windowSeconds: number;
+    /** Per-IP budget of the `read` class. */
+    readMax: number;
+    /** Per-IP and per-API-key budget of the `write` class. */
+    writeMax: number;
+    webhookReplay: {
+      max: number;
+      windowSeconds: number;
+    };
+    webhookEndpointCreate: {
+      max: number;
+      windowSeconds: number;
+    };
+    /**
+     * Redis-unavailability posture (D8): `open` degrades enforcement to a
+     * bounded in-process store (a sandbox must not trade availability for
+     * enforcement), `closed` rejects with 429 instead. Either way a Redis error
+     * never becomes a 5xx and never fails readiness.
+     */
+    failMode: RateLimitFailMode;
+    /**
+     * Proxy trust (D1). `0` means "the socket peer is the client": forwarded
+     * headers are then ignored for limit purposes. A deployment behind a load
+     * balancer sets an explicit bounded trust here — a CIDR allowlist with
+     * {@link trustedProxyCidrs}, plus a hop count bounding how much of the chain
+     * is read. Boot refuses a hop count without an allowlist, because a hop
+     * count bounds how much of the chain is read, never who wrote it.
+     */
+    trustedProxyHops: number;
+    /** CIDR allowlist of proxies whose forwarded headers may be honored. */
+    trustedProxyCidrs: readonly string[];
+  };
 }
+
+export type RateLimitFailMode = 'open' | 'closed';
 
 const DEFAULT_DATABASE_URL = 'postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public';
 const DEFAULT_REDIS_URL = 'redis://localhost:6379';
@@ -159,6 +205,49 @@ const DEFAULT_REQUEST_LOG_CLEANUP_INTERVAL_MS = 3_600_000;
 // never delete anything while looking configured.
 const MAX_REQUEST_LOG_RETENTION_DAYS = 3650;
 const MAX_REQUEST_LOG_CLEANUP_INTERVAL_MS = 86_400_000;
+
+// Phase 13 rate-limit defaults (D6): the confirmed sandbox numbers of §6.2.
+// Generous by design — a sandbox whose own developer cannot run a
+// payment/retry/replay loop is not usable. Raising one is an environment
+// change, never a code change.
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
+const DEFAULT_RATE_LIMIT_READ_MAX = 600;
+const DEFAULT_RATE_LIMIT_WRITE_MAX = 120;
+const DEFAULT_RATE_LIMIT_WEBHOOK_REPLAY_MAX = 20;
+const DEFAULT_RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS = 300;
+const DEFAULT_RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX = 10;
+const DEFAULT_RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS = 3600;
+
+/**
+ * Ceiling on the trusted proxy hop count (D1/§8). The chain length read out of
+ * `X-Forwarded-For` is attacker-influenced input: an unbounded hop count is how
+ * a forged header chain becomes a forged client identity, so a value past this
+ * fails at boot instead of silently trusting an arbitrary chain.
+ */
+const MAX_TRUST_PROXY_HOPS = 10;
+
+/**
+ * Floor on a trusted proxy entry's prefix length (D1). A private range is at
+ * most a /8 in IPv4 (`10.0.0.0/8`), so anything shorter — `0.0.0.0/0` above
+ * all — trusts publicly routable space instead of a fleet of proxies, which is
+ * the same failure as trusting nothing at all.
+ *
+ * An IPv6 entry needs a much stricter floor than its IPv4 equivalent: an IPv6
+ * block is 4 billion times larger per prefix bit, so `::/8` and `2000::/8` are
+ * the whole routing table, not a fleet. `/32` is a site allocation — a proxy
+ * tier is narrower still (`fd00:1234::/48`, a `/64`, or a `/128` per address).
+ */
+const MIN_TRUSTED_PROXY_PREFIX = 8;
+const MIN_TRUSTED_PROXY_PREFIX_V6 = 32;
+
+/**
+ * The IPv4-mapped IPv6 range (`::ffff:0:0/96`): every IPv4 address spelled as
+ * IPv6. An entry there is an IPv4 range in disguise, so it has to satisfy the
+ * IPv4 floor too — `::ffff:0:0/96` is `0.0.0.0/0` in another notation and would
+ * put every IPv4 peer behind the proxy gate.
+ */
+const IPV4_MAPPED_PREFIX = 96;
+const IPV4_MAPPED_START = '::ffff:0.0.0.0';
 
 /**
  * Ceiling on the retry ladder (D5). The ladder tops out at an hour of backoff
@@ -229,6 +318,195 @@ function parseBoolean(raw: string | undefined, fallback: boolean, name: string):
     return false;
   }
   throw new Error(`${name} must be "true" or "false" (received "${raw}")`);
+}
+
+/**
+ * A non-negative integer with a ceiling. Used for the trusted proxy hop count
+ * (D1), where `0` is the meaningful "trust nothing forwarded" value and the
+ * ceiling keeps an attacker-influenced chain length bounded (§8).
+ */
+function parseBoundedNonNegativeInt(
+  raw: string | undefined,
+  fallback: number,
+  max: number,
+  name: string,
+): number {
+  const value = raw === undefined || raw === '' ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer (received "${raw}")`);
+  }
+  if (value > max) {
+    throw new Error(`${name} must be at most ${max} (received "${raw}")`);
+  }
+  return value;
+}
+
+/** Phase 13 D8: the Redis-unavailability posture is a closed enum, not a boolean. */
+function parseRateLimitFailMode(raw: string | undefined): RateLimitFailMode {
+  if (raw === undefined || raw === '') {
+    return 'open';
+  }
+  if (raw === 'open' || raw === 'closed') {
+    return raw;
+  }
+  throw new Error(`RATE_LIMIT_FAIL_MODE must be "open" or "closed" (received "${raw}")`);
+}
+
+/**
+ * Validates the trusted proxy allowlist at boot (D1). A malformed CIDR would
+ * otherwise become an allowlist entry that can never match — a proxy whose
+ * headers are silently ignored while the deployment believes they are trusted.
+ * A bare address is normalized to its single-host form (`/32`, `/128`).
+ *
+ * A prefix shorter than the family floor ({@link MIN_TRUSTED_PROXY_PREFIX} for
+ * IPv4, {@link MIN_TRUSTED_PROXY_PREFIX_V6} for IPv6) is refused as well: an
+ * entry that trusts the whole internet is not a list of proxies, and it would
+ * neutralize the model exactly as trusting nothing forwarded would. IPv6
+ * entries covering the IPv4-mapped range are held to the IPv4 floor too.
+ */
+function parseTrustedProxyCidrs(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const separator = entry.lastIndexOf('/');
+      const address = separator === -1 ? entry : entry.slice(0, separator);
+      const version = isIP(address);
+      if (!version) {
+        throw new Error(`TRUST_PROXY_CIDRS entry "${entry}" is not a valid CIDR address`);
+      }
+      if (separator === -1) {
+        return `${address}/${version === 4 ? 32 : 128}`;
+      }
+      const prefix = Number(entry.slice(separator + 1));
+      const maximum = version === 4 ? 32 : 128;
+      if (!Number.isInteger(prefix) || prefix < 0 || prefix > maximum) {
+        throw new Error(
+          `TRUST_PROXY_CIDRS entry "${entry}" must use a prefix length between 0 and ${maximum}`,
+        );
+      }
+      const floor = version === 4 ? MIN_TRUSTED_PROXY_PREFIX : MIN_TRUSTED_PROXY_PREFIX_V6;
+      if (prefix < floor) {
+        throw new Error(
+          `TRUST_PROXY_CIDRS entry "${entry}" must not be shorter than /${floor}: ` +
+            'a broader entry trusts the whole internet instead of a list of proxies',
+        );
+      }
+      if (version === 6) {
+        assertNarrowerThanIpv4Space(entry, address, prefix);
+      }
+      return `${address}/${prefix}`;
+    });
+}
+
+/**
+ * Guards an IPv6 entry that includes IPv4-mapped addresses, whose implied IPv4
+ * range has to satisfy the IPv4 floor. Membership is delegated to
+ * `net.BlockList` rather than hand-written bit arithmetic: this check decides
+ * who may speak for a client, and a subtle prefix bug here is an identity bug.
+ *
+ * The entry covers the mapped space either *partly* (its addresses sit inside
+ * `::ffff:0:0/96`, so it implies the IPv4 block `prefix - 96`) or *wholly*
+ * (a shorter prefix whose range reaches in, implying all of IPv4).
+ */
+function assertNarrowerThanIpv4Space(entry: string, address: string, prefix: number): void {
+  if (prefix >= IPV4_MAPPED_PREFIX) {
+    const mapped = new BlockList();
+    mapped.addSubnet('::ffff:0:0', IPV4_MAPPED_PREFIX, 'ipv6');
+    if (mapped.check(address, 'ipv6') && prefix - IPV4_MAPPED_PREFIX < MIN_TRUSTED_PROXY_PREFIX) {
+      throw new Error(
+        `TRUST_PROXY_CIDRS entry "${entry}" is an IPv4 range spelled as IPv6: its ` +
+          `implied IPv4 prefix /${prefix - IPV4_MAPPED_PREFIX} must be at least /${MIN_TRUSTED_PROXY_PREFIX}`,
+      );
+    }
+    return;
+  }
+  const candidate = new BlockList();
+  candidate.addSubnet(address, prefix, 'ipv6');
+  if (candidate.check(IPV4_MAPPED_START, 'ipv6')) {
+    throw new Error(
+      `TRUST_PROXY_CIDRS entry "${entry}" spans the IPv4-mapped range ` +
+        `${IPV4_MAPPED_START}/${IPV4_MAPPED_PREFIX}: it would trust every IPv4 peer`,
+    );
+  }
+}
+
+/**
+ * The rate-limit policy section (phase 13 §5/§6.2), parsed and validated as one
+ * unit because its two proxy-trust values constrain each other: a hop count is
+ * only meaningful with an allowlist saying *which* proxies may speak for a client.
+ */
+function loadRateLimitConfiguration(): BrinnPayConfig['rateLimit'] {
+  const trustedProxyHops = parseBoundedNonNegativeInt(
+    process.env.TRUST_PROXY_HOPS,
+    0,
+    MAX_TRUST_PROXY_HOPS,
+    'TRUST_PROXY_HOPS',
+  );
+  const trustedProxyCidrs = parseTrustedProxyCidrs(process.env.TRUST_PROXY_CIDRS);
+
+  if (trustedProxyHops > 0 && trustedProxyCidrs.length === 0) {
+    // `X-Forwarded-For` is written by the client as far as any deployment that
+    // reaches this process directly is concerned, so a hop count on its own would
+    // let the caller name its own rate-limit identity and mint a fresh budget per
+    // request — defeating every class, including the credential-stuffing one.
+    throw new Error(
+      'TRUST_PROXY_CIDRS is required when TRUST_PROXY_HOPS is greater than 0. A hop count bounds ' +
+        'how much of the forwarded chain is read; only the allowlist decides who may write it. ' +
+        'Either set TRUST_PROXY_HOPS=0 (forwarded headers ignored, direct socket peer used) or ' +
+        'list the proxies that may speak for a client.',
+    );
+  }
+
+  return {
+    windowSeconds: parsePositiveInt(
+      process.env.RATE_LIMIT_WINDOW_SECONDS,
+      DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+      'RATE_LIMIT_WINDOW_SECONDS',
+    ),
+    readMax: parsePositiveInt(
+      process.env.RATE_LIMIT_READ_MAX,
+      DEFAULT_RATE_LIMIT_READ_MAX,
+      'RATE_LIMIT_READ_MAX',
+    ),
+    writeMax: parsePositiveInt(
+      process.env.RATE_LIMIT_WRITE_MAX,
+      DEFAULT_RATE_LIMIT_WRITE_MAX,
+      'RATE_LIMIT_WRITE_MAX',
+    ),
+    webhookReplay: {
+      max: parsePositiveInt(
+        process.env.RATE_LIMIT_WEBHOOK_REPLAY_MAX,
+        DEFAULT_RATE_LIMIT_WEBHOOK_REPLAY_MAX,
+        'RATE_LIMIT_WEBHOOK_REPLAY_MAX',
+      ),
+      windowSeconds: parsePositiveInt(
+        process.env.RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS,
+        DEFAULT_RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS,
+        'RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS',
+      ),
+    },
+    webhookEndpointCreate: {
+      max: parsePositiveInt(
+        process.env.RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX,
+        DEFAULT_RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX,
+        'RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX',
+      ),
+      windowSeconds: parsePositiveInt(
+        process.env.RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS,
+        DEFAULT_RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS,
+        'RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS',
+      ),
+    },
+    failMode: parseRateLimitFailMode(process.env.RATE_LIMIT_FAIL_MODE),
+    trustedProxyHops,
+    trustedProxyCidrs,
+  };
 }
 
 function resolveJwtSecret(nodeEnv: string): { secret: string; accessTokenTtlSeconds: number } {
@@ -445,6 +723,7 @@ export function loadConfiguration(): BrinnPayConfig {
         'REQUEST_LOG_CLEANUP_INTERVAL_MS',
       ),
     },
+    rateLimit: loadRateLimitConfiguration(),
   };
 }
 

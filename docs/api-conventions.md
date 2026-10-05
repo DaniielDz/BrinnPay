@@ -125,7 +125,7 @@ Consistent JSON error envelope across all endpoints:
 | 404    | Not found                           |
 | 409    | Conflict                            |
 | 422    | Business rule violation             |
-| 429    | Rate limited                        |
+| 429    | Rate limited (see §10)              |
 | 5xx    | Server error                        |
 
 ## 7. Request IDs
@@ -176,3 +176,189 @@ Consistent JSON error envelope across all endpoints:
 - **Environments**: a project supports both `TEST`/`LIVE` (API: `test`/`live`) by default; each
   environment-scoped resource belongs to exactly one environment and TEST/LIVE data is never mixed
   (phase 1 §5.2).
+
+## 10. Rate limiting
+
+> Authoritative policy source for **Phase 13 — Rate Limiting** (phase 13
+> specification §4, §6.2). Phase 15 renders this section publicly; the same
+> numbers appear in `openapi.yaml` (`info.description` → *Rate limiting*) and in
+> `components/headers`.
+
+Every request under `/api/v1` is rate limited. The limits exist to bound
+credential guessing, scraping, enumeration and outbound amplification — they are
+an abuse control, not a quota product.
+
+### 10.1 Dimensions (scopes)
+
+| Scope | Discriminator | Applies to |
+| --- | --- | --- |
+| `ip` | Normalized client identity | Every request under the prefix |
+| `api_key` | The resolved API key's id (never the presented plaintext) | API-key-authenticated operations of a class that declares it |
+| `account` | Normalized account email | `POST /auth/register`, `POST /auth/login` |
+
+- There is **no** session-user dimension and **no** per-organization dimension.
+  Session-authenticated requests are covered by `ip`, and credential guessing is
+  already covered per `account`.
+- An API-key-authenticated request consumes **both** its `ip` and its `api_key`
+  budget; a session-authenticated request consumes only `ip`.
+- Budgets are isolated: exhausting one key's budget does not throttle a second
+  key, a key of another project, or session traffic from the same client.
+- The `ip` budget is the one dimension that is **shared across tenants**: every
+  client behind one egress address (a corporate NAT, a shared proxy) spends the
+  same `ip` bucket, so one tenant's traffic can exhaust it for the others. That
+  is inherent to keying on an address rather than on an identity, and it is why
+  `ip` limits are deliberately generous.
+
+### 10.2 Operation classes
+
+Every operation belongs to exactly one class of this closed catalog. There is no
+per-operation limit table; the catalog *is* the endpoint-specific policy. The
+values below are deployment configuration (environment variables), and the
+numbers shown are the sandbox defaults.
+
+| Class | Operations | Limit / window | Scopes |
+| --- | --- | --- | --- |
+| `auth.session-creation` | `POST /auth/register`, `POST /auth/login` | 10 / 900 s | `ip`, `account` |
+| `auth.refresh` | `POST /auth/refresh`, `POST /auth/logout` | 60 / 900 s | `ip` |
+| `auth.read` | `GET /auth/me` | 100 / 900 s | `ip` |
+| `read` | every other `GET` | 600 / 60 s | `ip` |
+| `write` | every other `POST`/`PATCH`/`DELETE` | 120 / 60 s | `ip`, `api_key` |
+| `webhook.replay` | `POST /projects/{project_id}/webhook-endpoints/{endpoint_id}/events/{event_id}/replay` | 20 / 300 s | `ip`, `api_key` |
+| `webhook.endpoint-create` | `POST /projects/{project_id}/webhook-endpoints` | 10 / 3600 s | `ip`, `api_key` |
+
+- Each class uses one **fixed** window, anchored at the **first** counted request
+  in that window rather than at a calendar boundary. Counting and window creation
+  are atomic and shared through Redis, so replicas cannot disagree about a budget.
+- Limits are deliberately generous: a sandbox whose own developer cannot run a
+  payment/retry/replay loop is not usable. Raising one is an environment change,
+  never a code change.
+- Configuration is validated at boot: a non-integer or non-positive limit or
+  window fails to start the service rather than silently disabling throttling.
+
+### 10.3 What counts
+
+A request that reaches the limiter consumes one unit of every applicable scope —
+**including** requests later rejected with `400`, `401`, `403`, `404`, `409`,
+`422` or `5xx`, and including idempotent replays. Excluded before any counting:
+CORS preflight requests, `GET /health/live`, `GET /health/ready`, Swagger UI
+traffic, and anything outside `/api/v1`.
+
+The `ip` check runs **before** route authentication, so an unauthenticated flood
+is bounded without a database lookup. The `api_key` check runs after the key has
+been resolved.
+
+One case is deliberately outside this: a request to a path that matches no route
+returns `404` without consuming budget, because a guard cannot run for a route
+that was never matched. It is still request-logged, so an attacker who scans
+nonexistent paths writes a row per request while spending nothing. The scan
+itself does no handler work, and write amplification belongs to Phases 19/20
+(spec §16), which own the request-log and load-test work.
+
+### 10.4 Response headers
+
+| Header | On | Meaning |
+| --- | --- | --- |
+| `RateLimit-Limit` | every response of a limited route | Limit of the reported budget |
+| `RateLimit-Remaining` | every response | Units left in the current window |
+| `RateLimit-Reset` | every response | Whole seconds until the window resets |
+| `Retry-After` | `429` only | Whole seconds until the reported budget's window resets |
+
+- When more than one scope applies, the reported budget is the one **closest to
+  exhaustion** (lowest remaining, ties broken by the catalog's scope order), so a
+  caller is never told there is headroom on a request that is about to be
+  rejected.
+- `RateLimit-Reset` and `Retry-After` come from the same atomic read as
+  `RateLimit-Remaining`; they are never estimated and are never zero or negative.
+- These four headers are listed in `Access-Control-Expose-Headers`, so a
+  cross-origin browser client can read its own remaining budget without a proxy
+  change. Nothing else is exposed, and no header discloses a discriminator, a key,
+  or an internal class or scope name.
+
+### 10.5 What a 429 means for retries
+
+- `429 RATE_LIMITED` is **retryable**, not an authorization or data problem. The
+  handler did not run, no state changed, and `Retry-After` says when to return.
+- `error.details` carries budget numbers only: `limit`, `remaining`,
+  `window_seconds`. It never carries an identity, a scope, a class name, or a
+  Redis key.
+- A `429` reveals nothing about whether a credential, key, project or
+  organization exists. The `ip` stage runs before authentication, so its `429`
+  is identical whether or not a presented key exists. The `api_key` stage runs
+  only after a key has resolved to a valid, unrevoked record, so an unknown or
+  revoked key is rejected with `401` first; a `429` from that stage discloses
+  only the budget the caller has already been told about.
+- **The `account` scope is per-account, not per-attacker.** Login and register
+  charge it on the submitted email *before* the request is validated, so anyone
+  who can guess an address can spend its budget and keep it spent — 10 attempts
+  per 900 s, refreshed as fast as the attacker repeats. The address's real owner
+  then sees `429` for the rest of that window. That is deliberate: an
+  unauthenticated attacker must not be able to buy unlimited attempts against
+  one account. The cost is a targeted, repeatable lockout of any address the
+  attacker can name, and nothing distinguishes the attacker's attempts from the
+  owner's. Recovering from it belongs to the auth experience, not to the limiter.
+- A throttled request is still request-logged and writes no audit entry.
+- A `429` stores no idempotency record, so the same `Idempotency-Key` remains
+  usable afterwards.
+
+### 10.6 Redis unavailability
+
+- **Default (fail open).** Enforcement degrades to a bounded in-process store
+  with a single non-identifying warning. Limits are then enforced per process
+  only. A Redis error never becomes a `5xx`, and readiness is unaffected.
+- **Optional (fail closed).** `RATE_LIMIT_FAIL_MODE=closed` rejects with `429`
+  instead, for deployments that prefer enforcement over availability.
+- The in-process store starts counting from the request that first reaches it,
+  so during the crossover — after a process start, or after Redis comes back
+  following an outage — a bucket can admit up to about twice its limit before
+  the Redis counter takes over. The window ends when the connection reaches
+  `ready`, command timeout and reconnect backoff included, and lasts one
+  crossover per episode.
+
+### 10.7 Client identity and proxy trust
+
+The client identity is the direct socket peer unless the deployment explicitly
+configures a bounded proxy trust, and then only as far as that configuration
+allows:
+
+- `TRUST_PROXY_CIDRS` lists the proxy addresses and is **mandatory with any
+  positive `TRUST_PROXY_HOPS`**; boot refuses the combination without it,
+  because a hop count bounds how much of the chain is read and never who
+  wrote it. Name only the proxy addresses (a `/32` or `/128` each). The floor
+  is `/8` for an IPv4 entry and `/32` for an IPv6 one — an IPv6 block is 4
+  billion times larger per prefix bit: `2000::/8` is every globally routable
+  peer and `::/8` contains the whole IPv4-mapped range, so either would put
+  the peer gate open to the internet rather than to a fleet. An IPv6 entry in
+  the IPv4-mapped range (`::ffff:0:0/96`) is an IPv4 range in disguise and is
+  held to the IPv4 floor as well.
+- `TRUST_PROXY_HOPS` must equal the real proxy depth. Set it too small and the
+  chain is read no further than that, so every client behind the chain lands
+  in one shared bucket; too large is harmless, the walk still stops at the
+  first untrusted entry.
+- The proxy must **append** to `X-Forwarded-For`. A proxy that forwards the
+  caller's header unchanged cannot be told apart from the caller, so no
+  configuration can recover a client identity behind it.
+- Forwarded headers from any other source are ignored for limit purposes, and
+  the identity is canonicalized before use so one client cannot hold several
+  budgets by varying the textual form of its address.
+
+### 10.8 Environment variables
+
+| Variable | Class / purpose | Default |
+| --- | --- | --- |
+| `AUTH_RATE_LIMIT_WINDOW_SECONDS` | `auth.*` window (unchanged names, Phase 3) | `900` |
+| `AUTH_RATE_LIMIT_IP_LOGIN_MAX` | `auth.session-creation` (`ip`) | `10` |
+| `AUTH_RATE_LIMIT_ACCOUNT_LOGIN_MAX` | `auth.session-creation` (`account`) | `10` |
+| `AUTH_RATE_LIMIT_IP_REFRESH_MAX` | `auth.refresh` (`ip`) | `60` |
+| `AUTH_RATE_LIMIT_IP_READ_MAX` | `auth.read` (`ip`) | `100` |
+| `RATE_LIMIT_READ_MAX` | `read` | `600` |
+| `RATE_LIMIT_WRITE_MAX` | `write` | `120` |
+| `RATE_LIMIT_WINDOW_SECONDS` | shared `read`/`write` window | `60` |
+| `RATE_LIMIT_WEBHOOK_REPLAY_MAX` | `webhook.replay` | `20` |
+| `RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS` | `webhook.replay` window | `300` |
+| `RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX` | `webhook.endpoint-create` | `10` |
+| `RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS` | `webhook.endpoint-create` window | `3600` |
+| `RATE_LIMIT_FAIL_MODE` | `open` \| `closed` | `open` |
+| `TRUST_PROXY_HOPS` | trusted proxy hops (`0` trusts nothing forwarded) | `0` |
+| `TRUST_PROXY_CIDRS` | CIDR allowlist of trusted proxies | empty |
+
+No value is a secret: rate-limit configuration is non-secret operational tuning.

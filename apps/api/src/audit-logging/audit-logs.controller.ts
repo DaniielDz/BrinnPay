@@ -8,6 +8,7 @@ import { ListQueryDto, type CursorPage } from '../organizations/cursor';
 import { CurrentMembership, type ResolvedMembership } from '../organizations/membership';
 import { OrgRbacGuard, RequireCapability } from '../organizations/org-rbac.guard';
 import { CAPABILITIES } from '../organizations/roles';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { AuditLogsService, type AuditLogEntryResponse } from './audit-logs.service';
 
 const RBAC = () => [SessionAuthGuard, OrgRbacGuard];
@@ -35,6 +36,7 @@ export class AuditLogsController {
   constructor(private readonly auditLogs: AuditLogsService) {}
 
   @Get()
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: CAPABILITIES.LOGS_READ })
   list(

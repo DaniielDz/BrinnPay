@@ -16,12 +16,12 @@ import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
 import type { BrinnPayConfig } from '../config/configuration';
 import { resolveRequestId } from '../request-id/request-id';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { AuthService } from './auth.service';
 import { clearRefreshCookie, refreshCookieSpec, setRefreshCookie } from './cookie';
 import { CurrentUser, type AuthenticatedRequest, type PublicUser } from './current-user';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { AuthRateLimit } from './rate-limit.decorator';
 import { AuthRateLimitGuard } from './rate-limit.guard';
 import { SessionAuthGuard } from './session-auth.guard';
 
@@ -30,6 +30,10 @@ import { SessionAuthGuard } from './session-auth.guard';
  * `/api/v1/auth`, are rate limited (D7), and follow the canonical envelope.
  * The refresh token is delivered exclusively as an `HttpOnly` cookie and never
  * appears in a JSON body.
+ *
+ * The phase 13 class catalog owns the numbers behind these limits (D6); the
+ * routes declare which class they belong to and nothing else. The Phase 3
+ * `AUTH_RATE_LIMIT_*` variables keep their names, defaults and meaning (D9).
  */
 @Controller('auth')
 @UseGuards(AuthRateLimitGuard)
@@ -44,8 +48,8 @@ export class AuthController {
   }
 
   @Post('register')
+  @RateLimit('auth.session-creation')
   @HttpCode(HttpStatus.CREATED)
-  @AuthRateLimit('session-creation')
   async register(
     @Body() dto: RegisterDto,
     @Req() req: { id?: unknown },
@@ -62,8 +66,8 @@ export class AuthController {
   }
 
   @Post('login')
+  @RateLimit('auth.session-creation')
   @HttpCode(HttpStatus.OK)
-  @AuthRateLimit('session-creation')
   async login(
     @Body() dto: LoginDto,
     @Req() req: { id?: unknown },
@@ -80,8 +84,8 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @RateLimit('auth.refresh')
   @HttpCode(HttpStatus.OK)
-  @AuthRateLimit('refresh')
   async refresh(
     @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
@@ -108,8 +112,8 @@ export class AuthController {
   }
 
   @Post('logout')
+  @RateLimit('auth.refresh')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @AuthRateLimit('refresh')
   async logout(
     @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: Response,
@@ -127,8 +131,8 @@ export class AuthController {
   }
 
   @Get('me')
+  @RateLimit('auth.read')
   @UseGuards(SessionAuthGuard)
-  @AuthRateLimit('read')
   me(@CurrentUser() user: PublicUser): PublicUser {
     return user;
   }

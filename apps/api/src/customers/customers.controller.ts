@@ -16,6 +16,8 @@ import {
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import type { CursorPage } from '../organizations/cursor';
 import { resolveRequestId } from '../request-id/request-id';
+import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { CustomersAccessGuard } from './customers-access.guard';
 import { CustomersScope, type CustomersScope as CustomersScopeValue } from './customers-scope';
 import { CustomersService, type CustomerResponse } from './customers.service';
@@ -40,7 +42,8 @@ export class CustomersController {
   constructor(private readonly customers: CustomersService) {}
 
   @Get()
-  @UseGuards(CustomersAccessGuard)
+  @RateLimit('read')
+  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.read' })
   list(
     @CustomersScope() scope: CustomersScopeValue,
@@ -50,8 +53,9 @@ export class CustomersController {
   }
 
   @Post()
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(CustomersAccessGuard)
+  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.create' })
   create(
     @CustomersScope() scope: CustomersScopeValue,
@@ -62,7 +66,8 @@ export class CustomersController {
   }
 
   @Get(':customer_id')
-  @UseGuards(CustomersAccessGuard)
+  @RateLimit('read')
+  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.read' })
   retrieve(
     @CustomersScope() scope: CustomersScopeValue,
@@ -72,7 +77,8 @@ export class CustomersController {
   }
 
   @Patch(':customer_id')
-  @UseGuards(CustomersAccessGuard)
+  @RateLimit('write')
+  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.update' })
   update(
     @CustomersScope() scope: CustomersScopeValue,
@@ -84,8 +90,9 @@ export class CustomersController {
   }
 
   @Delete(':customer_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @UseGuards(CustomersAccessGuard)
+  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.delete' })
   async remove(
     @CustomersScope() scope: CustomersScopeValue,

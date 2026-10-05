@@ -6,6 +6,8 @@ import type { Response } from 'express';
 
 import { ListQueryDto, type CursorPage } from '../organizations/cursor';
 import { resolveRequestId } from '../request-id/request-id';
+import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { PaymentsScope, type PaymentsScope as PaymentsScopeValue } from '../payments/payments-scope';
 import { RefundCreateDto } from './dto/refund-create.dto';
@@ -18,7 +20,8 @@ export class RefundsController {
   constructor(private readonly refunds: RefundsService) {}
 
   @Get()
-  @UseGuards(RefundsAccessGuard)
+  @RateLimit('read')
+  @UseGuards(RefundsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'refunds.read' })
   list(
     @PaymentsScope() scope: PaymentsScopeValue,
@@ -29,8 +32,9 @@ export class RefundsController {
   }
 
   @Post()
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(RefundsAccessGuard)
+  @UseGuards(RefundsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'refunds.create' })
   async create(
     @PaymentsScope() scope: PaymentsScopeValue,
@@ -49,7 +53,8 @@ export class RefundsController {
   }
 
   @Get(':refund_id')
-  @UseGuards(RefundsAccessGuard)
+  @RateLimit('read')
+  @UseGuards(RefundsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'refunds.read' })
   retrieve(
     @PaymentsScope() scope: PaymentsScopeValue,
