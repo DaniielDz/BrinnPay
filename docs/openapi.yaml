@@ -44,12 +44,65 @@ info:
       HTTP status semantics: 400 validation, 401 unauthenticated, 403
       forbidden, 404 not found, 409 conflict, 422 business rule violation, 429
       rate limited, 5xx server.
+    - Rate limiting (phase 13): **every** operation is rate limited. Three limit
+      dimensions (scopes), applied per operation class, with the budget reported
+      on every response — see the policy below and `api-conventions.md` §10.
     - Request IDs (phase 1 §7.7): every request is assigned a request ID at
       ingress and every response carries it in the `X-Request-Id` header.
     - Time and format conventions (phase 1 §7.8): timestamps are UTC ISO 8601
       (`YYYY-MM-DDTHH:MM:SS.sssZ`); entity IDs are UUIDv7 and must be treated as
       opaque strings; monetary amounts are decimal strings paired with a
       lowercase currency code (`usd` only in the MVP, ADR-0003).
+
+    ## Rate limiting (phase 13)
+
+    Every request under this prefix consumes a per-client budget **before**
+    authentication runs, so an unauthenticated flood is bounded without a
+    database lookup. Requests rejected later — validation, authentication,
+    authorization, a business rule, or a replayed idempotent request — count too.
+
+    **Dimensions (scopes)**
+
+    | Scope | Discriminator | Applies to |
+    | --- | --- | --- |
+    | `ip` | Normalized client identity | Every request under the prefix |
+    | `api_key` | The resolved API key's id | API-key-authenticated operations that declare it |
+    | `account` | Normalized account email | `POST /auth/register`, `POST /auth/login` |
+
+    There is no session-user or per-organization dimension: session-authenticated
+    requests are covered by `ip`, and credential guessing is covered per account.
+
+    **Operation classes and defaults**
+
+    | Class | Operations | Limit / window | Scopes |
+    | --- | --- | --- | --- |
+    | `auth.session-creation` | `POST /auth/register`, `POST /auth/login` | 10 / 900 s | `ip`, `account` |
+    | `auth.refresh` | `POST /auth/refresh`, `POST /auth/logout` | 60 / 900 s | `ip` |
+    | `auth.read` | `GET /auth/me` | 100 / 900 s | `ip` |
+    | `read` | every other `GET` | 600 / 60 s | `ip` |
+    | `write` | every other `POST`/`PATCH`/`DELETE` | 120 / 60 s | `ip`, `api_key` |
+    | `webhook.replay` | `POST /projects/{project_id}/webhook-endpoints/{endpoint_id}/events/{event_id}/replay` | 20 / 300 s | `ip`, `api_key` |
+    | `webhook.endpoint-create` | `POST /projects/{project_id}/webhook-endpoints` | 10 / 3600 s | `ip`, `api_key` |
+
+    Every number is deployment configuration, not a per-operation table; the
+    defaults above are the sandbox values and are raised, never hard-coded, in a
+    deployment. Each class's window is a **fixed** window anchored at the first
+    counted request in that window, counted atomically and shared by every replica.
+
+    **Excluded from counting and throttling** (decided before any limit is
+    applied): CORS preflight requests, `GET /health/live`, `GET /health/ready`,
+    Swagger UI traffic, and anything outside this prefix.
+
+    **Responses** — a limited route reports `RateLimit-Limit`,
+    `RateLimit-Remaining` and `RateLimit-Reset` on **every** response; a `429`
+    additionally carries `Retry-After`. All four are listed in
+    `Access-Control-Expose-Headers`, so a cross-origin browser client can read
+    its own remaining budget. A `429` is retryable, runs no handler, changes
+    nothing, and stores no idempotency record.
+
+    **Redis unavailability** — by default enforcement degrades to a bounded
+    in-process store (no `5xx`, one warning, readiness unaffected); a deployment
+    may set `RATE_LIMIT_FAIL_MODE=closed` to reject with `429` instead.
 
     Sources: master specification `.ai/SPEC.md`, phase 1 specification
     (`.ai/phases/phase-01-architecture-mvp-spec.md`), ADRs 0001–0010.
@@ -1862,6 +1915,46 @@ components:
       schema:
         type: string
         example: brinnpay_refresh=; Path=/api/v1/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0
+    RateLimit-Limit:
+      description: |
+        The limit of the budget reported on this response (phase 13 §4.4). The
+        reported budget is the one **closest to exhaustion** of the scopes that
+        apply to the operation, so a caller is never told there is headroom on a
+        request that is about to be rejected. Values are per-class configuration,
+        not per-operation ones.
+      schema:
+        type: integer
+        minimum: 1
+        example: 120
+    RateLimit-Remaining:
+      description: |
+        Units left in the current window of the reported budget. `0` means the
+        next request of the same scope and class is rejected with `429`. Present
+        on allowed **and** rejected responses.
+      schema:
+        type: integer
+        minimum: 0
+        example: 119
+    RateLimit-Reset:
+      description: |
+        Whole seconds until the current window of the reported budget resets. The
+        window is anchored at the first counted request of that window, not at a
+        calendar boundary, and the value comes from the same atomic read as
+        `RateLimit-Remaining` — never an estimate. Always at least `1`.
+      schema:
+        type: integer
+        minimum: 1
+        example: 60
+    Retry-After:
+      description: |
+        Present on `429` only: whole seconds until the reported budget's window
+        resets. It is derived from the same atomic read as `RateLimit-Reset`, so
+        a client can wait exactly this long and retry, and it is never zero or
+        negative.
+      schema:
+        type: integer
+        minimum: 1
+        example: 47
 
   parameters:
     OrganizationId:
@@ -2226,10 +2319,34 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
     RateLimited:
-      description: The request exceeded an applicable rate limit.
+      description: |
+        The request exceeded an applicable rate limit (phase 13). Every operation
+        is rate limited; see the rate-limiting policy in `info.description` and
+        `docs/api-conventions.md` §10.
+
+        A `429` is **retryable**, never an authorization or data problem: the
+        handler did not run, nothing was changed, and the response says when to
+        try again through `Retry-After`. Requests rejected earlier in the request
+        lifecycle (validation, authentication, authorization, a business rule) are
+        counted too, so a caller may see a `429` where it previously saw a `4xx`
+        while its budget was being consumed.
+
+        The response repeats `X-Request-Id` and reports the budget of the bucket
+        that was exhausted through `RateLimit-Limit`, `RateLimit-Remaining` and
+        `RateLimit-Reset`. `error.details` carries budget numbers only
+        (`limit`, `remaining`, `window_seconds`) and never an identity, a scope or
+        an internal name.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
+        Retry-After:
+          $ref: "#/components/headers/Retry-After"
       content:
         application/json:
           schema:
