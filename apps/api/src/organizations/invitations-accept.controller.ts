@@ -5,6 +5,7 @@ import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/error-code';
 import { resolveRequestId } from '../request-id/request-id';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { OrganizationsService, type OrganizationMemberResponse } from './organizations.service';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -21,6 +22,7 @@ export class InvitationsAcceptController {
   constructor(private readonly organizations: OrganizationsService) {}
 
   @Post(':invitation_id/accept')
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(SessionAuthGuard)
   accept(

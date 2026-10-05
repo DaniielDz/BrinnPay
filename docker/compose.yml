@@ -58,6 +58,21 @@ services:
       WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
       WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
       WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
+      # Phase 13: rate-limit policy. Defaults here are the code defaults, listed
+      # explicitly so the local stack documents them (none are secret). The
+      # `auth.*` classes keep their phase 3 `AUTH_RATE_LIMIT_*` names and values.
+      RATE_LIMIT_READ_MAX: ${RATE_LIMIT_READ_MAX:-600}
+      RATE_LIMIT_WRITE_MAX: ${RATE_LIMIT_WRITE_MAX:-120}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_WEBHOOK_REPLAY_MAX: ${RATE_LIMIT_WEBHOOK_REPLAY_MAX:-20}
+      RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS: ${RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS:-300}
+      RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX: ${RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX:-10}
+      RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS: ${RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS:-3600}
+      RATE_LIMIT_FAIL_MODE: ${RATE_LIMIT_FAIL_MODE:-open}
+      # No proxy in the local stack: the socket peer is the client, and forwarded
+      # headers are ignored for limit purposes (D1).
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-}
     ports:
       - "${API_PORT:-3000}:3000"
     depends_on:

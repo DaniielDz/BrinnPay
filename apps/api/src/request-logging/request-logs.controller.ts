@@ -6,6 +6,7 @@ import { RequireCapability } from '../organizations/org-rbac.guard';
 import { CAPABILITIES } from '../organizations/roles';
 import { ProjectRbacGuard } from '../projects/project-rbac.guard';
 import { CurrentProject, type ResolvedProject } from '../projects/request-project';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { RequestLogListQueryDto } from './dto/request-log-list-query.dto';
 import { RequestLogsService, type RequestLogResponse } from './request-logs.service';
 
@@ -31,6 +32,7 @@ export class RequestLogsController {
   constructor(private readonly requestLogs: RequestLogsService) {}
 
   @Get()
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: CAPABILITIES.LOGS_READ })
   list(

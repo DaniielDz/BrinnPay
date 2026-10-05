@@ -21,6 +21,8 @@ import {
 import type { CursorPage } from '../organizations/cursor';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { resolveRequestId } from '../request-id/request-id';
+import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 // Value imports, not `import type`: the global ValidationPipe resolves the DTO
 // class from the emitted design:paramtypes metadata, so a type-only import would
 // leave every body and query on this surface unvalidated.
@@ -66,7 +68,8 @@ export class WebhooksController {
   // -------------------------------------------------------------------------
 
   @Get('webhook-endpoints')
-  @UseGuards(ProjectAccessGuard)
+  @RateLimit('read')
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.read' })
   listEndpoints(
     @ProjectScope() scope: ProjectScopeValue,
@@ -81,8 +84,9 @@ export class WebhooksController {
    * new secret, and duplicate URLs are allowed (D16).
    */
   @Post('webhook-endpoints')
+  @RateLimit('webhook.endpoint-create')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(ProjectAccessGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.create' })
   createEndpoint(
     @ProjectScope() scope: ProjectScopeValue,
@@ -92,7 +96,8 @@ export class WebhooksController {
   }
 
   @Get('webhook-endpoints/:endpoint_id')
-  @UseGuards(ProjectAccessGuard)
+  @RateLimit('read')
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.read' })
   retrieveEndpoint(
     @ProjectScope() scope: ProjectScopeValue,
@@ -102,7 +107,8 @@ export class WebhooksController {
   }
 
   @Patch('webhook-endpoints/:endpoint_id')
-  @UseGuards(ProjectAccessGuard)
+  @RateLimit('write')
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.update' })
   updateEndpoint(
     @ProjectScope() scope: ProjectScopeValue,
@@ -113,8 +119,9 @@ export class WebhooksController {
   }
 
   @Delete('webhook-endpoints/:endpoint_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @UseGuards(ProjectAccessGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.delete' })
   async deleteEndpoint(
     @ProjectScope() scope: ProjectScopeValue,
@@ -128,7 +135,8 @@ export class WebhooksController {
   // -------------------------------------------------------------------------
 
   @Get('webhook-endpoints/:endpoint_id/deliveries')
-  @UseGuards(ProjectAccessGuard)
+  @RateLimit('read')
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.read' })
   listDeliveries(
     @ProjectScope() scope: ProjectScopeValue,
@@ -139,7 +147,8 @@ export class WebhooksController {
   }
 
   @Get('webhook-events')
-  @UseGuards(ProjectAccessGuard)
+  @RateLimit('read')
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.read' })
   listEvents(
     @ProjectScope() scope: ProjectScopeValue,
@@ -153,8 +162,9 @@ export class WebhooksController {
    * idempotency-key protected: repeated calls create repeated deliveries.
    */
   @Post('webhook-endpoints/:endpoint_id/events/:event_id/replay')
+  @RateLimit('webhook.replay')
   @HttpCode(HttpStatus.ACCEPTED)
-  @UseGuards(ProjectAccessGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'webhooks.replay' })
   async replayEvent(
     @ProjectScope() scope: ProjectScopeValue,

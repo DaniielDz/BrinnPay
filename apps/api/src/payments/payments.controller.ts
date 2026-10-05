@@ -16,6 +16,8 @@ import type { Response } from 'express';
 
 import type { CursorPage } from '../organizations/cursor';
 import { resolveRequestId } from '../request-id/request-id';
+import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { PaymentCreateDto } from './dto/payment-create.dto';
 import { PaymentListQueryDto } from './dto/payment-list-query.dto';
@@ -47,7 +49,8 @@ export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
   @Get()
-  @UseGuards(PaymentsAccessGuard)
+  @RateLimit('read')
+  @UseGuards(PaymentsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'payments.read' })
   list(
     @PaymentsScope() scope: PaymentsScopeValue,
@@ -57,8 +60,9 @@ export class PaymentsController {
   }
 
   @Post()
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(PaymentsAccessGuard)
+  @UseGuards(PaymentsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'payments.create' })
   async create(
     @PaymentsScope() scope: PaymentsScopeValue,
@@ -80,7 +84,8 @@ export class PaymentsController {
   }
 
   @Get(':payment_id')
-  @UseGuards(PaymentsAccessGuard)
+  @RateLimit('read')
+  @UseGuards(PaymentsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'payments.read' })
   retrieve(
     @PaymentsScope() scope: PaymentsScopeValue,

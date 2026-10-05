@@ -15,6 +15,7 @@ import { CurrentUser, type AuthUser } from '../auth/current-user';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { ListQueryDto, type CursorPage } from '../organizations/cursor';
 import { RequireCapability } from '../organizations/org-rbac.guard';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { ProjectCreateDto } from './dto/project-create.dto';
 import { ProjectUpdateDto } from './dto/project-update.dto';
 import { CurrentProject, type ResolvedProject } from './request-project';
@@ -36,6 +37,7 @@ export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
   @Get()
+  @RateLimit('read')
   @UseGuards(SessionAuthGuard)
   list(
     @CurrentUser() user: AuthUser,
@@ -45,6 +47,7 @@ export class ProjectsController {
   }
 
   @Post()
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(SessionAuthGuard)
   create(
@@ -55,6 +58,7 @@ export class ProjectsController {
   }
 
   @Get(':project_id')
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'projects.read' })
   retrieve(@CurrentProject() project: ResolvedProject): Promise<ProjectResponse> {
@@ -62,6 +66,7 @@ export class ProjectsController {
   }
 
   @Patch(':project_id')
+  @RateLimit('write')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'projects.update' })
   update(
@@ -72,6 +77,7 @@ export class ProjectsController {
   }
 
   @Delete(':project_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'projects.delete' })

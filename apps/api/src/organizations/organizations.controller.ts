@@ -16,6 +16,7 @@ import {
 import { CurrentUser, type AuthUser } from '../auth/current-user';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
 import { resolveRequestId } from '../request-id/request-id';
+import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { ListQueryDto, type CursorPage } from './cursor';
 import { InvitationCreateDto } from './dto/invitation-create.dto';
 import { MemberRoleDto } from './dto/member-role.dto';
@@ -42,6 +43,7 @@ export class OrganizationsController {
   constructor(private readonly organizations: OrganizationsService) {}
 
   @Get()
+  @RateLimit('read')
   @UseGuards(SessionAuthGuard)
   list(
     @CurrentUser() user: AuthUser,
@@ -51,6 +53,7 @@ export class OrganizationsController {
   }
 
   @Post()
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(SessionAuthGuard)
   create(
@@ -61,6 +64,7 @@ export class OrganizationsController {
   }
 
   @Get(':organization_id')
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'organizations.read' })
   retrieve(@CurrentMembership() membership: ResolvedMembership): Promise<OrganizationResponse> {
@@ -68,6 +72,7 @@ export class OrganizationsController {
   }
 
   @Patch(':organization_id')
+  @RateLimit('write')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'organizations.update' })
   update(
@@ -78,6 +83,7 @@ export class OrganizationsController {
   }
 
   @Delete(':organization_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'organizations.delete' })
@@ -86,6 +92,7 @@ export class OrganizationsController {
   }
 
   @Get(':organization_id/members')
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'members.read' })
   listMembers(
@@ -96,6 +103,7 @@ export class OrganizationsController {
   }
 
   @Patch(':organization_id/members/:user_id')
+  @RateLimit('write')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'members.update', options: { allowSelf: true } })
   updateMember(
@@ -114,6 +122,7 @@ export class OrganizationsController {
   }
 
   @Delete(':organization_id/members/:user_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'members.remove', options: { allowSelf: true } })
@@ -131,6 +140,7 @@ export class OrganizationsController {
   }
 
   @Get(':organization_id/invitations')
+  @RateLimit('read')
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'invitations.read' })
   listInvitations(
@@ -145,6 +155,7 @@ export class OrganizationsController {
   }
 
   @Post(':organization_id/invitations')
+  @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'invitations.create' })
@@ -163,6 +174,7 @@ export class OrganizationsController {
   }
 
   @Delete(':organization_id/invitations/:invitation_id')
+  @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(...RBAC())
   @RequireCapability({ capability: 'invitations.cancel' })

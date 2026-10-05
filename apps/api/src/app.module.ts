@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 
 import { AuthModule } from './auth/auth.module';
@@ -16,6 +16,8 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
+import { RateLimitGuard } from './rate-limiting/rate-limit.guard';
+import { RateLimitingModule } from './rate-limiting/rate-limit.module';
 import { RedisModule } from './redis/redis.module';
 import { RefundsModule } from './refunds/refunds.module';
 import { RequestLoggingModule } from './request-logging/request-logging.module';
@@ -25,10 +27,9 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 /**
  * Root application module (Phase 8). Wires the base cross-cutting
  * infrastructure (configuration, structured logging, Prisma, Redis, health
- * checks, the global error envelope, idempotency) together with the auth,
- * organizations, projects, api-keys, customers, payments, refunds, webhooks,
- * request-logging and audit-logging domain modules. Rate limiting arrives with
- * its owning phase (13).
+ * checks, the global error envelope, idempotency, rate limiting) together with
+ * the auth, organizations, projects, api-keys, customers, payments, refunds,
+ * webhooks, request-logging and audit-logging domain modules.
  *
  * The webhook **worker** is deliberately absent (D14): it is a separate process
  * with its own entrypoint (`worker.ts`) so the API only enqueues. `WebhooksModule`
@@ -53,6 +54,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     PrismaModule,
     RedisModule,
     IdempotencyModule,
+    RateLimitingModule,
     HealthModule,
     AuthModule,
     OrganizationsModule,
@@ -70,6 +72,13 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     {
       provide: APP_FILTER,
       useClass: ApiExceptionFilter,
+    },
+    {
+      // Phase 13 §4.3 stage 1. Global so it precedes **every** route
+      // authentication and runs before any database work; the stage-2 API-key
+      // point is a per-route guard exported by `RateLimitingModule`.
+      provide: APP_GUARD,
+      useClass: RateLimitGuard,
     },
   ],
 })
