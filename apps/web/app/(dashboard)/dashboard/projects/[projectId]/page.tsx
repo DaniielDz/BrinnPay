@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { useAuth } from '../../../../../components/auth/auth-provider';
@@ -57,6 +57,7 @@ const ENVIRONMENT_OPTIONS: Environment[] = ['test', 'live'];
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const router = useRouter();
+  const pathname = usePathname() ?? `/dashboard/projects/${projectId}`;
   const searchParams = useSearchParams();
   const { accessToken, user } = useAuth();
 
@@ -118,7 +119,7 @@ export default function ProjectPage() {
     return (
       <section>
         <h1>Project</h1>
-        <p>Loading project…</p>
+        <p className="state state-loading">Loading project…</p>
       </section>
     );
   }
@@ -177,6 +178,19 @@ export default function ProjectPage() {
     return `${href}?environment=${environment}`;
   }
 
+  /**
+   * Operable environment selector (phase 14 §6.5, D4): the URL stays the
+   * source of truth — choosing an environment rewrites the `environment` query
+   * parameter, which the shell propagates to every environment-scoped child
+   * link (deep links, the `test` default and TEST/LIVE separation are
+   * unchanged; invalid values still fall back to `test`).
+   */
+  function selectEnvironment(option: Environment): void {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('environment', option);
+    router.replace(`${pathname}?${params.toString()}`);
+  }
+
   return (
     <section>
       <p>
@@ -188,11 +202,20 @@ export default function ProjectPage() {
       {actionError ? <p role="alert">{actionError}</p> : null}
 
       <div className="environment-selector" role="group" aria-label="Environment selector">
-        {ENVIRONMENT_OPTIONS.map((option) => (
-          <span key={option} className={`${option === environment ? 'env-selected' : ''}`}>
-            {option.toUpperCase()}
-          </span>
-        ))}
+        {ENVIRONMENT_OPTIONS.map((option) => {
+          const selected = option === environment;
+          return (
+            <button
+              key={option}
+              type="button"
+              className={selected ? 'env-option env-selected' : 'env-option'}
+              aria-pressed={selected}
+              onClick={() => selectEnvironment(option)}
+            >
+              {option.toUpperCase()}
+            </button>
+          );
+        })}
       </div>
 
       {canManage ? (

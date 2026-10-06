@@ -26,7 +26,12 @@ function stubRefunds(options: { member?: boolean; environment?: string } = {}) {
     const path = String(url);
     const paymentId = path.match(/\/payments\/([^/?]+)\/refunds/)?.[1];
     if (!paymentId) return fetchPayments(url, init);
-    const respond = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body });
+    const respond = (status: number, body: unknown, headers: Record<string, string> = {}) => ({
+      ok: status < 400,
+      status,
+      json: async () => body,
+      headers: new Headers(headers),
+    });
     if (init?.method === 'POST') {
       const body = JSON.parse(String(init.body)) as { amount?: string; reason?: string };
       const created: Refund = {

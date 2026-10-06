@@ -1,0 +1,195 @@
+/**
+ * Public area (phase 14 §4, §7.1): header, navigation with authentication CTAs,
+ * hero, capability grid, steps and footer. Responsive from small mobile widths
+ * to desktop without horizontal scrolling; links and headings keep their
+ * accessible names — this file only changes presentation.
+ */
+
+.public-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.public-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+}
+
+.brand:hover {
+  text-decoration: none;
+  color: var(--color-primary);
+}
+
+.public-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.public-nav,
+.public-nav-auth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.public-header nav a {
+  color: var(--color-text);
+}
+
+.public-header nav .button-primary {
+  color: var(--color-text-inverse);
+}
+
+.public-layout main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+}
+
+.public-page section {
+  margin-bottom: var(--space-7);
+}
+
+.hero {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-sm);
+}
+
+.hero h1 {
+  font-size: var(--font-size-3xl);
+}
+
+.hero-lead {
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+  max-width: 46rem;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.capability-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: var(--space-4);
+}
+
+.capability-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+.capability-card h3 {
+  margin-bottom: var(--space-2);
+}
+
+.capability-card p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.steps {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+}
+
+.steps li {
+  margin-bottom: var(--space-3);
+}
+
+.cta-section {
+  background: var(--color-primary-soft);
+  border: 1px solid #c6d4f8;
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+
+.public-footer {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.public-footer nav ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+}
+
+.footer-identity {
+  font-weight: 600;
+  margin: 0;
+}
+
+.footer-sandbox {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Small screens: keep everything in flow, no horizontal scrolling. */
+@media (max-width: 40rem) {
+  .public-header {
+    padding: var(--space-3);
+  }
+
+  .public-layout main {
+    padding: var(--space-5) var(--space-3);
+  }
+
+  .hero {
+    padding: var(--space-4);
+  }
+
+  .hero h1 {
+    font-size: var(--font-size-2xl);
+  }
+
+  .cta-row .button {
+    width: 100%;
+  }
+}

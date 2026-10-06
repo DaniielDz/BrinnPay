@@ -290,7 +290,7 @@ export default function ProjectCustomersPage() {
     return (
       <section>
         <h1>Customers</h1>
-        <p>Loading customers…</p>
+        <p className="state state-loading">Loading customers…</p>
       </section>
     );
   }
@@ -360,7 +360,7 @@ export default function ProjectCustomersPage() {
       ) : null}
 
       <h2>Customers</h2>
-      {customers.length === 0 ? <p>No customers in {selectedEnvironment.toUpperCase()} yet.</p> : null}
+      {customers.length === 0 ? <p className="state">No customers in {selectedEnvironment.toUpperCase()} yet.</p> : null}
       <ul>
         {customers.map((customer) => (
           <li key={customer.id}>

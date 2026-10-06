@@ -13,6 +13,9 @@
  * `http://localhost:3000/api/v1` during local development). Defaults to the
  * local development API (phase 3 §5.2.6).
  */
+import { captureRateLimit, formatDelay, retryAfterSecondsFor } from './rate-limit';
+import { recoverSession } from './session';
+
 export interface PublicUser {
   id: string;
   email: string;
@@ -113,27 +116,134 @@ export interface UpdateMemberInput {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3000/api/v1';
 
+/** The configured API base URL (public configuration, safe to display). */
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
+
 export class ApiClientError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
     readonly requestId?: string,
+    /** Seconds the API asked the caller to wait (`Retry-After`), when given. */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'ApiClientError';
   }
 }
 
-async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
+/** `Retry-After` is published on 429 only (phase 13 §4.4). */
+const RETRY_AFTER_HEADER = 'Retry-After';
+
+/**
+ * The single error-presentation rule of the application (phase 14 §7.3, D6).
+ *
+ * Every page renders `ApiClientError.message` in a `role="alert"` element, so
+ * the wording is composed here — once — instead of being passed through per
+ * page:
+ *
+ * - `429` is a **retryable, transient** condition carrying the indicated delay;
+ *   it never reads as an authorization, session or data problem (phase 13
+ *   handover).
+ * - A mid-session `401` reads as re-authenticate (the refresh/retry already
+ *   ran in `apiFetch`; a failed refresh redirects to `/login`).
+ * - `403` reads as a permission state, `404`/`400`/`409`/`422` keep the API's
+ *   message (it is the reason for the refusal), `5xx` is a generic retryable
+ *   failure. No stack traces or internals, ever.
+ * - The API's `request_id` is appended when the envelope provides it
+ *   (`docs/api-conventions.md` §7 — issue-reporting flow).
+ */
+function composeErrorMessage(
+  status: number,
+  code: string,
+  apiMessage: string | undefined,
+  requestId: string | undefined,
+  retryAfterSeconds: number | undefined,
+  isSessionRoute: boolean,
+): string {
+  const withRequestId = (text: string): string =>
+    requestId ? `${text} (request id: ${requestId})` : text;
+
+  if (status === 429 || code === 'RATE_LIMITED') {
+    const base = 'Too many requests — this is temporary.';
+    if (retryAfterSeconds === undefined || retryAfterSeconds === null) {
+      return `${base} Please wait a moment and try again.`;
+    }
+    if (retryAfterSeconds <= 0) return `${base} You can try again now.`;
+    return `${base} Try again in ${formatDelay(retryAfterSeconds)}.`;
+  }
+
+  if (status === 401 && !isSessionRoute) {
+    return withRequestId('Your session has expired. Please sign in again.');
+  }
+
+  if (status === 403) {
+    return withRequestId(apiMessage ?? 'You do not have permission to perform this action.');
+  }
+
+  if (status >= 500) {
+    // Fixed wording: a 5xx envelope message is never forwarded to the UI, so
+    // no future server-side detail can leak through this presentation layer
+    // (the API already sanitizes — this is the client's own backstop).
+    return withRequestId('The request failed. Please try again.');
+  }
+
+  return withRequestId(apiMessage ?? `Request failed with status ${status}`);
+}
+
+async function apiFetch<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  const isSessionRoute = path.startsWith('/auth/');
+  const method = (init.method ?? 'GET').toUpperCase();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init.headers as Record<string, string> | undefined),
+  };
+
+  // Throttled action (phase 14 §7.4): while the API-indicated delay runs, the
+  // same method+path fails fast with the retryable error instead of re-hitting
+  // the limit — the action is disabled for exactly the indicated delay, and
+  // every attempt reports the remaining wait. Session routes are never gated.
+  if (!retried && !isSessionRoute) {
+    const blockedFor = retryAfterSecondsFor(path, { method });
+    if (blockedFor !== null) {
+      throw new ApiClientError(
+        429,
+        'RATE_LIMITED',
+        composeErrorMessage(429, 'RATE_LIMITED', undefined, undefined, blockedFor, false),
+        undefined,
+        blockedFor,
+      );
+    }
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers,
+    });
+  } catch {
+    // Network/parse failure: generic and retryable, never internals (§7.3).
+    throw new ApiClientError(
+      0,
+      'NETWORK_ERROR',
+      'The request could not be completed. Check your connection and try again.',
+      undefined,
+    );
+  }
+
+  // Budget + throttle bookkeeping (§7.4): presentation data only, silent when
+  // the response carries no rate-limit headers, and the throttle is armed by a
+  // `429` alone so another status's `Retry-After` never masks its real error.
+  captureRateLimit(path, response.headers, { status: response.status, method });
+
+  const retryAfterHeader = response.headers.get(RETRY_AFTER_HEADER);
+  const retryAfterSeconds =
+    retryAfterHeader === null ? undefined : (Number.parseInt(retryAfterHeader, 10) || 0);
 
   if (response.status === 204) {
     return undefined as T;
@@ -143,11 +253,26 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const envelope = body as ApiErrorEnvelope | null;
+    const code = envelope?.error?.code ?? 'UNKNOWN_ERROR';
+    const apiMessage = envelope?.error?.message;
+    const requestId = envelope?.error?.request_id;
+
+    // Unauthenticated mid-session (§7.3): attempt the refresh flow once and
+    // retry with the fresh token; a failed refresh clears the session so the
+    // existing guard redirects to `/login`.
+    if (response.status === 401 && !retried && !isSessionRoute) {
+      const token = await recoverSession();
+      if (token !== null) {
+        return apiFetch<T>(path, { ...init, headers: { ...headers, Authorization: `Bearer ${token}` } }, true);
+      }
+    }
+
     throw new ApiClientError(
       response.status,
-      envelope?.error?.code ?? 'UNKNOWN_ERROR',
-      envelope?.error?.message ?? `Request failed with status ${response.status}`,
-      envelope?.error?.request_id,
+      code,
+      composeErrorMessage(response.status, code, apiMessage, requestId, retryAfterSeconds, isSessionRoute),
+      requestId,
+      retryAfterSeconds,
     );
   }
 

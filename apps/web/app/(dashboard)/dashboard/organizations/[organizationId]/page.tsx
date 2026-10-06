@@ -124,7 +124,7 @@ export default function OrganizationDetailPage() {
     return (
       <section>
         <h1>Organization</h1>
-        <p>Loading organization…</p>
+        <p className="state state-loading">Loading organization…</p>
       </section>
     );
   }
@@ -344,7 +344,7 @@ export default function OrganizationDetailPage() {
             </button>
           </form>
           {invitations.length === 0 ? (
-            <p>No invitations yet.</p>
+            <p className="state">No invitations yet.</p>
           ) : (
             <ul>
               {invitations.map((invitation) => (

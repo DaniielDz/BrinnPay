@@ -100,7 +100,7 @@ export default function ProjectApiKeysPage() {
     return (
       <section>
         <h1>API keys</h1>
-        <p>Loading API keys…</p>
+        <p className="state state-loading">Loading API keys…</p>
       </section>
     );
   }
@@ -249,7 +249,7 @@ export default function ProjectApiKeysPage() {
 
       <h2>Keys</h2>
       {keys.length === 0 ? (
-        <p>No API keys yet.</p>
+        <p className="state">No API keys yet.</p>
       ) : (
         <ul>
           {keys.map((key) => (

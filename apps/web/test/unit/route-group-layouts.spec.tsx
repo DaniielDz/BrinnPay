@@ -8,7 +8,10 @@ import { AuthProvider } from '../../components/auth/auth-provider';
 import { stubAuthApi, unstubAuthApi } from './auth-test-utils';
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: replaceMock }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: replaceMock }),
+  usePathname: () => '/dashboard',
+}));
 
 describe('route-group layouts (phase 2 §5.2, phase 3 §4.4)', () => {
   beforeEach(() => {
@@ -54,6 +57,21 @@ describe('route-group layouts (phase 2 §5.2, phase 3 §4.4)', () => {
     expect(screen.getByText('page content')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
     expect(replaceMock).not.toHaveBeenCalled();
+
+    // Phase 14 §6.1: one shell — signed-in identity, a visible current-location
+    // state, and the disclosure control that keeps the nav reachable at
+    // small widths (§7.1).
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('dev@example.com')).toBeInTheDocument();
+    const current = nav.querySelector('[aria-current="page"]');
+    expect(current).not.toBeNull();
+    expect(current).toHaveTextContent('Overview');
+    const toggle = screen.getByRole('button', { name: /menu/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', 'dashboard-navigation');
+    expect(
+      screen.queryByRole('button', { name: /environment|test|live/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('does not render the dashboard shell without a session', async () => {

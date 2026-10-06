@@ -137,7 +137,12 @@ services:
     ports:
       - "${WEB_PORT:-3001}:3001"
     volumes:
+      # Phase 14: the shell, components and stylesheets are live code too —
+      # mounting only `app` would silently hide every edit made there.
       - ../apps/web/app:/app/apps/web/app
+      - ../apps/web/components:/app/apps/web/components
+      - ../apps/web/lib:/app/apps/web/lib
+      - ../apps/web/styles:/app/apps/web/styles
       - ../apps/web/next.config.ts:/app/apps/web/next.config.ts
 
 volumes:
