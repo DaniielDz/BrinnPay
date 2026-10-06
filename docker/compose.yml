@@ -144,6 +144,10 @@ services:
       - ../apps/web/lib:/app/apps/web/lib
       - ../apps/web/styles:/app/apps/web/styles
       - ../apps/web/next.config.ts:/app/apps/web/next.config.ts
+      # Phase 15: the embedded API reference loads the canonical contract from
+      # the checkout at build/render time (ADR-0030) — `docs/` is outside
+      # `apps/web`, so it needs its own mount.
+      - ../docs:/app/docs:ro
 
 volumes:
   postgres-data:

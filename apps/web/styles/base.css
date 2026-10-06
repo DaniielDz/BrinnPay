@@ -85,6 +85,24 @@ strong {
   font-size: var(--font-size-sm);
 }
 
+/*
+ * Screen-reader-only text (phase 15 §4.2): available to assistive technology,
+ * out of the visual layout. Used by table captions so every data table keeps
+ * an accessible name without printing it under the table.
+ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Buttons                                                            */
 /* ------------------------------------------------------------------ */

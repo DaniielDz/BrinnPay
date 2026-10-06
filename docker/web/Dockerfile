@@ -19,6 +19,11 @@ COPY apps/web/package.json apps/web/package.json
 
 RUN pnpm install --frozen-lockfile
 
+# Phase 15: the API reference is generated from the canonical contract at
+# build/render time (ADR-0030), so the image carries `docs/openapi.yaml`.
+# Application source arrives through the compose bind mounts in development.
+COPY docs/openapi.yaml docs/openapi.yaml
+
 WORKDIR /app/apps/web
 
 EXPOSE 3001
