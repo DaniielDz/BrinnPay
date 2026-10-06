@@ -110,16 +110,28 @@ type FakeResponse = {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  // Phase 14: apiFetch reads RateLimit-*/Retry-After off the response, so every
+  // stub must answer with a Headers object (empty by default, overridable).
+  headers: Headers;
 };
 
-const respond = (status: number, body?: unknown): FakeResponse => ({
+const respond = (
+  status: number,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): FakeResponse => ({
   ok: status >= 200 && status < 300,
   status,
   json: async () => body ?? null,
+  headers: new Headers(headers),
 });
 
-const fail = (code: string, message: string, status: number): FakeResponse =>
-  respond(status, { error: { code, message } });
+const fail = (
+  code: string,
+  message: string,
+  status: number,
+  headers: Record<string, string> = {},
+): FakeResponse => respond(status, { error: { code, message } }, headers);
 
 export interface ProjectsApiBehaviour {
   /** When set, every project-scoped route returns this code (e.g. NOT_FOUND). */
@@ -151,6 +163,10 @@ export function stubProjectsApi(behaviour: ProjectsApiBehaviour = {}) {
     }
     if (url.endsWith('/auth/me')) {
       return respond(200, activeSession.user);
+    }
+    // Logout is idempotent (phase 3 D9): the shell's sign-out path exercises it.
+    if (url.endsWith('/auth/logout')) {
+      return respond(204);
     }
 
     const membersPath = url.match(/^\/organizations\/([^/]+)\/members(?:\?|$)/);

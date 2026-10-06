@@ -10,7 +10,9 @@ import {
   type ReactNode,
 } from 'react';
 
-import { login as apiLogin, logout as apiLogout, refresh as apiRefresh, register as apiRegister, type AuthSession, type PublicUser } from '../../lib/brinnpay/client';
+import { ApiClientError, login as apiLogin, logout as apiLogout, refresh as apiRefresh, register as apiRegister, type AuthSession, type PublicUser } from '../../lib/brinnpay/client';
+import { resetRateLimitStore } from '../../lib/brinnpay/rate-limit';
+import { setUnauthorizedRecovery } from '../../lib/brinnpay/session';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -52,6 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setAccessToken(null);
     setStatus('unauthenticated');
+    // Rate-limit budget and throttle state are per-session presentation data:
+    // dropping them here keeps user A's state from bleeding into user B's
+    // session in the same tab (phase 14 §7.4).
+    resetRateLimitStore();
   }, []);
 
   useEffect(() => {
@@ -66,6 +72,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, [applySession, clearSession]);
+
+  // Recovery path for a mid-session `401` (phase 14 §7.3): the API client
+  // hands a failed authenticated request back here once — refresh through the
+  // existing session flow, or clear the session so `AuthGuard` redirects to
+  // `/login`. Never shown to the user as a generic failure. Concurrent callers
+  // share one refresh (see `lib/brinnpay/session.ts`), and only an actual
+  // rejection of the refresh clears the session: a transport failure or a 5xx
+  // is not evidence that the session is gone, so it never signs the user out.
+  useEffect(() => {
+    setUnauthorizedRecovery(async () => {
+      try {
+        const session = await apiRefresh();
+        applySession(session);
+        return session.access_token;
+      } catch (error) {
+        const rejected =
+          error instanceof ApiClientError && error.status >= 400 && error.status < 500;
+        if (rejected) clearSession();
+        return null;
+      }
+    });
+    return () => setUnauthorizedRecovery(null);
   }, [applySession, clearSession]);
 
   const login = useCallback(

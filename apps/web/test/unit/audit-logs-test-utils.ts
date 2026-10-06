@@ -76,16 +76,28 @@ type FakeResponse = {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  // Phase 14: apiFetch reads RateLimit-*/Retry-After off the response, so every
+  // stub must answer with a Headers object (empty by default, overridable).
+  headers: Headers;
 };
 
-const respond = (status: number, body?: unknown): FakeResponse => ({
+const respond = (
+  status: number,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): FakeResponse => ({
   ok: status >= 200 && status < 300,
   status,
   json: async () => body ?? null,
+  headers: new Headers(headers),
 });
 
-const fail = (code: string, message: string, status: number): FakeResponse =>
-  respond(status, { error: { code, message } });
+const fail = (
+  code: string,
+  message: string,
+  status: number,
+  headers: Record<string, string> = {},
+): FakeResponse => respond(status, { error: { code, message } }, headers);
 
 export interface AuditLogsApiBehaviour {
   /** When set, the project and the entry list both answer with this code. */

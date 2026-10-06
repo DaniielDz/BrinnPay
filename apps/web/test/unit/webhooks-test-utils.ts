@@ -12,6 +12,9 @@ type FakeResponse = {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  // Phase 14: apiFetch reads RateLimit-*/Retry-After off the response, so every
+  // stub must answer with a Headers object (empty by default, overridable).
+  headers: Headers;
 };
 
 export const endpointFixtures: WebhookEndpoint[] = [
@@ -95,14 +98,23 @@ export const deliveryFixtures: WebhookDelivery[] = [
   },
 ];
 
-const respond = (status: number, body?: unknown): FakeResponse => ({
+const respond = (
+  status: number,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): FakeResponse => ({
   ok: status >= 200 && status < 300,
   status,
   json: async () => body ?? null,
+  headers: new Headers(headers),
 });
 
-const fail = (code: string, message: string, status: number): FakeResponse =>
-  respond(status, { error: { code, message } });
+const fail = (
+  code: string,
+  message: string,
+  status: number,
+  headers: Record<string, string> = {},
+): FakeResponse => respond(status, { error: { code, message } }, headers);
 
 /** A cursor page as the client sees it, so pagination can be driven from a stub. */
 export interface CursorPage<T> {
