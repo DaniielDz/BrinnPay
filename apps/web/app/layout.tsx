@@ -2,6 +2,12 @@ import type { Metadata } from 'next';
 
 import { AuthProvider } from '../components/auth/auth-provider';
 
+import '../styles/tokens.css';
+import '../styles/base.css';
+import '../styles/public.css';
+import '../styles/auth.css';
+import '../styles/dashboard.css';
+
 export const metadata: Metadata = {
   title: 'BrinnPay',
   description: 'Payment infrastructure sandbox for developers.',

@@ -1,0 +1,395 @@
+/**
+ * Base styles shared by every area (phase 14 §7.1): reset, typography scale,
+ * focus visibility, and the shared control/state vocabulary (buttons, forms,
+ * alerts, badges, tables). Semantic class names already used by the pages are
+ * styled here so page behavior and tests are untouched.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height);
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 var(--space-3);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: var(--font-size-2xl);
+}
+
+h2 {
+  font-size: var(--font-size-xl);
+}
+
+h3 {
+  font-size: var(--font-size-lg);
+}
+
+p {
+  margin: 0 0 var(--space-3);
+}
+
+ul,
+ol {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-5);
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Focus visibility (§7.6): keyboard users always see where they are. */
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+strong {
+  font-weight: 600;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  word-break: break-all;
+}
+
+.hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ------------------------------------------------------------------ */
+/* Buttons                                                            */
+/* ------------------------------------------------------------------ */
+
+button,
+.button {
+  font: inherit;
+  font-size: var(--font-size-base);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-block;
+  text-align: center;
+}
+
+button:hover:not(:disabled),
+.button:hover {
+  background: var(--color-surface-alt);
+}
+
+button:disabled,
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.button-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+
+.button-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.button-secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+button.danger {
+  background: var(--color-surface);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+}
+
+/* ------------------------------------------------------------------ */
+/* Forms                                                              */
+/* ------------------------------------------------------------------ */
+
+form {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+  max-width: 32rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-weight: 500;
+  width: 100%;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  width: 100%;
+  max-width: 100%;
+}
+
+input:disabled,
+select:disabled {
+  background: var(--color-surface-alt);
+}
+
+/* ------------------------------------------------------------------ */
+/* Status vocabulary                                                  */
+/* ------------------------------------------------------------------ */
+
+[role='alert'] {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  border: 1px solid #f2b8b5;
+  color: var(--color-danger);
+}
+
+.state {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.state-loading {
+  color: var(--color-text-muted);
+}
+
+.state-empty h3,
+.state-empty p {
+  margin-bottom: var(--space-3);
+}
+
+.warning {
+  background: var(--color-warning-soft);
+  border: 1px solid #e7c98f;
+  color: var(--color-warning);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}
+
+.env-badge {
+  display: inline-block;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-right: var(--space-1);
+}
+
+.env-test {
+  background: var(--color-env-test-bg);
+  color: var(--color-env-test-text);
+}
+
+.env-live {
+  background: var(--color-env-live-bg);
+  color: var(--color-env-live-text);
+}
+
+.payment-status {
+  display: inline-block;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.payment-status-succeeded {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.payment-status-failed {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.payment-status-pending,
+.payment-status-processing {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.caller-role,
+.owning-org {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.environments {
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tables                                                             */
+/* ------------------------------------------------------------------ */
+
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin-bottom: var(--space-4);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  background: var(--color-surface);
+  font-size: var(--font-size-sm);
+}
+
+caption {
+  text-align: left;
+  font-weight: 600;
+  padding-bottom: var(--space-2);
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+th {
+  background: var(--color-surface-alt);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lists and page blocks                                             */
+/* ------------------------------------------------------------------ */
+
+.page {
+  display: block;
+}
+
+.page-subtitle {
+  color: var(--color-text-muted);
+}
+
+.page-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.item-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.item-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.definition-list {
+  margin: 0 0 var(--space-4);
+}
+
+.definition-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.definition-list dt {
+  font-weight: 600;
+  min-width: 8rem;
+}
+
+.definition-list dd {
+  margin: 0;
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion preference (§7.6)                                           */
+/* ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
