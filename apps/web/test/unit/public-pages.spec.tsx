@@ -5,6 +5,7 @@ import PublicLayout from '../../app/(public)/layout';
 import DocsPage, { metadata as docsMetadata } from '../../app/(public)/docs/page';
 import HomePage, { metadata as homeMetadata } from '../../app/(public)/page';
 import ProductPage, { metadata as productMetadata } from '../../app/(public)/product/page';
+import { DOCS_SECTIONS } from '../../lib/docs/sections';
 
 /**
  * Phase 14 §4 / §11.1 (D9): the negative assertions are re-scoped from banning
@@ -61,14 +62,24 @@ describe('public pages (phase 2 §5.2, phase 14 §4)', () => {
     expect(container.textContent).not.toMatch(/pricing|\$\d/i);
   });
 
-  it('keeps /docs as the phase 15 entry point', () => {
+  it('serves the real documentation index as the phase 15 entry point', () => {
     render(<DocsPage />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'Documentation' })).toBeInTheDocument();
-    expect(screen.getByText(/phase 15/i)).toBeInTheDocument();
     expect(docsMetadata.title).toMatch(/documentation/i);
-    // It stays an entry point — no guide content grows here (§4.1).
-    expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument();
+    expect(docsMetadata.description).toBeTruthy();
+
+    // Entry points (phase 15 §12 AC1): quickstart first, API reference next.
+    expect(screen.getByRole('link', { name: /start the quickstart/i })).toHaveAttribute(
+      'href',
+      '/docs/quickstart',
+    );
+    expect(screen.getAllByRole('link', { name: /api reference/i }).length).toBeGreaterThan(0);
+
+    // The complete section list is rendered from the shared registry (§4.1),
+    // so the index cannot drift from navigation or the guide inventory.
+    expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(DOCS_SECTIONS.length);
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(2);
   });
 
   it('exposes no authenticated content on the public home page (D9)', () => {
