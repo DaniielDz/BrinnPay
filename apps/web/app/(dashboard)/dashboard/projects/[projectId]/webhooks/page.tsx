@@ -301,7 +301,7 @@ export default function ProjectWebhooksPage() {
     return (
       <section>
         <h1>Webhooks</h1>
-        <p>Loading webhooks…</p>
+        <p className="state state-loading">Loading webhooks…</p>
       </section>
     );
   }
@@ -392,7 +392,7 @@ export default function ProjectWebhooksPage() {
 
       <h2>Endpoints</h2>
       {endpoints.length === 0 ? (
-        <p>No webhook endpoints in {environment.toUpperCase()} yet.</p>
+        <p className="state">No webhook endpoints in {environment.toUpperCase()} yet.</p>
       ) : (
         <ul>
           {endpoints.map((endpoint) => (
@@ -459,7 +459,7 @@ export default function ProjectWebhooksPage() {
             </select>
           </label>
           {deliveries.length === 0 ? (
-            <p>No deliveries for this endpoint yet.</p>
+            <p className="state">No deliveries for this endpoint yet.</p>
           ) : (
             <ul>
               {deliveries.map((delivery) => (
@@ -512,7 +512,7 @@ export default function ProjectWebhooksPage() {
         </select>
       </label>
       {events.length === 0 ? (
-        <p>No events in {environment.toUpperCase()} yet.</p>
+        <p className="state">No events in {environment.toUpperCase()} yet.</p>
       ) : (
         <ul>
           {events.map((event) => (

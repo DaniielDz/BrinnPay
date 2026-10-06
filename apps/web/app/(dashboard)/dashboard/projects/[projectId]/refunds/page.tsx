@@ -181,7 +181,7 @@ export default function ProjectRefundsPage() {
     .filter((item) => item.status === 'succeeded').reduce((sum, item) => sum + minor(item.amount), BigInt(0)) : BigInt(0);
   const canCreate = role === 'owner' || role === 'admin';
 
-  if (loading) return <section><h1>Refunds</h1><p>Loading refunds…</p></section>;
+  if (loading) return <section><h1>Refunds</h1><p className="state state-loading">Loading refunds…</p></section>;
   if (notFound || !project) return (
     <section><h1>Project not found</h1><p>The project does not exist or you are not a member of its organization.</p></section>
   );
@@ -194,7 +194,7 @@ export default function ProjectRefundsPage() {
       {error && <p role="alert">{error}</p>}
       {actionError && <p role="alert">{actionError}</p>}
       <h2>Payments</h2>
-      {payments.length === 0 && <p>No payments in {environment.toUpperCase()} yet.</p>}
+      {payments.length === 0 && <p className="state">No payments in {environment.toUpperCase()} yet.</p>}
       <ul>{payments.map((item) => (
         <li key={item.id}>
           ${item.amount} — {item.status}{' '}
@@ -208,8 +208,8 @@ export default function ProjectRefundsPage() {
         <p>Payment: ${payment.amount} {payment.currency.toUpperCase()} — {payment.status}</p>
         <p>Remaining refundable: {refundsMore ? 'Load all refunds to calculate' : `$${dollars(remaining)}`}</p>
         <button type="button" onClick={() => void loadRefunds(payment.id)}>Refresh refunds</button>
-        {refundLoading && <p>Loading payment refunds…</p>}
-        {!refundLoading && refunds.length === 0 && <p>No refunds for this payment yet.</p>}
+        {refundLoading && <p className="state state-loading">Loading payment refunds…</p>}
+        {!refundLoading && refunds.length === 0 && <p className="state">No refunds for this payment yet.</p>}
         <ul>{refunds.map((item) => (
           <li key={item.id}>
             ${item.amount} — {item.status}{' '}

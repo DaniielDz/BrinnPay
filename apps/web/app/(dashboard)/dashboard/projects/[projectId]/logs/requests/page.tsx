@@ -236,7 +236,7 @@ export default function ProjectLogsRequestsPage() {
     return (
       <section>
         <h1>Request logs</h1>
-        <p>Loading request logs…</p>
+        <p className="state state-loading">Loading request logs…</p>
       </section>
     );
   }
@@ -291,7 +291,7 @@ export default function ProjectLogsRequestsPage() {
         {records.length > 0 ? ` — ${records.length} shown` : ''}
       </p>
 
-      {listLoading && records.length === 0 ? <p>Loading request logs…</p> : null}
+      {listLoading && records.length === 0 ? <p className="state state-loading">Loading request logs…</p> : null}
 
       {!listLoading && !listError && records.length === 0 ? (
         <p>

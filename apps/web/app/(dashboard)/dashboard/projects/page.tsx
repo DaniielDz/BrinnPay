@@ -121,12 +121,12 @@ export default function ProjectsPage() {
     <section>
       <h1>Projects</h1>
 
-      {loading ? <p>Loading projects…</p> : null}
+      {loading ? <p className="state state-loading">Loading projects…</p> : null}
       {!loading && error ? <p role="alert">{error}</p> : null}
 
       {!loading && !error ? (
         projects.length === 0 ? (
-          <p>No projects yet. Create your first one below.</p>
+          <p className="state">No projects yet. Create your first one below.</p>
         ) : (
           <ul>
             {projects.map((project) => (

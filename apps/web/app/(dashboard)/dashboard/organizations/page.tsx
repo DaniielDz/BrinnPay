@@ -93,12 +93,12 @@ export default function OrganizationsPage() {
     <section>
       <h1>Organizations</h1>
 
-      {loading ? <p>Loading organizations…</p> : null}
+      {loading ? <p className="state state-loading">Loading organizations…</p> : null}
       {!loading && error ? <p role="alert">{error}</p> : null}
 
       {!loading && !error ? (
         organizations.length === 0 ? (
-          <p>No organizations yet. Create your first one below.</p>
+          <p className="state">No organizations yet. Create your first one below.</p>
         ) : (
           <ul>
             {organizations.map((organization) => (

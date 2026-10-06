@@ -226,7 +226,7 @@ export default function ProjectPaymentsPage() {
     return (
       <section>
         <h1>Payments</h1>
-        <p>Loading payments…</p>
+        <p className="state state-loading">Loading payments…</p>
       </section>
     );
   }
@@ -312,7 +312,7 @@ export default function ProjectPaymentsPage() {
       ) : null}
 
       <h2>Payments</h2>
-      {payments.length === 0 ? <p>No payments in {selectedEnvironment.toUpperCase()} yet.</p> : null}
+      {payments.length === 0 ? <p className="state">No payments in {selectedEnvironment.toUpperCase()} yet.</p> : null}
       <ul>
         {payments.map((payment) => (
           <li key={payment.id}>

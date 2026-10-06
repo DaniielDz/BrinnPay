@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../../components/auth/auth-provider';
@@ -17,10 +17,12 @@ import {
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 const { paramsMock } = vi.hoisted(() => ({ paramsMock: vi.fn() }));
 const { searchParamsMock } = vi.hoisted(() => ({ searchParamsMock: vi.fn() }));
+const { pathnameMock } = vi.hoisted(() => ({ pathnameMock: vi.fn(() => '/dashboard') }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: replaceMock }),
   useParams: () => paramsMock(),
   useSearchParams: () => searchParamsMock(),
+  usePathname: () => pathnameMock(),
 }));
 
 function setEnvironmentQuery(value: string | null): void {
@@ -154,6 +156,49 @@ describe('project shell page (phase 5 §5.1/§5.3)', () => {
       'href',
       `/dashboard/projects/${projectFixture.id}/customers?environment=live`,
     );
+  });
+
+  it('switches environment through the operable selector: query parameter and child links update (AC8, D4)', async () => {
+    setEnvironmentQuery(null);
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    pathnameMock.mockReturnValue(`/dashboard/projects/${projectFixture.id}`);
+    stubProjectsApi();
+    const view = render(
+      <AuthProvider>
+        <ProjectPage />
+      </AuthProvider>,
+    );
+
+    await screen.findByRole('heading', { level: 1, name: 'Payments API' });
+
+    // Operable control with an exposed selected state (keyboard-operable: real
+    // buttons inside a labelled group — not inert spans).
+    const group = screen.getByRole('group', { name: 'Environment selector' });
+    const testButton = within(group).getByRole('button', { name: 'TEST' });
+    const liveButton = within(group).getByRole('button', { name: 'LIVE' });
+    expect(testButton).toHaveAttribute('aria-pressed', 'true');
+    expect(liveButton).toHaveAttribute('aria-pressed', 'false');
+
+    // Choosing LIVE rewrites the `environment` query parameter in the URL.
+    fireEvent.click(liveButton);
+    expect(replaceMock).toHaveBeenCalledWith(
+      `/dashboard/projects/${projectFixture.id}?environment=live`,
+    );
+
+    // The URL stays the source of truth: the view re-renders from the new
+    // parameter and every environment-scoped child link follows.
+    setEnvironmentQuery('live');
+    view.rerender(
+      <AuthProvider>
+        <ProjectPage />
+      </AuthProvider>,
+    );
+    const apiKeysLink = await screen.findByRole('link', { name: /API keys/ });
+    expect(apiKeysLink).toHaveAttribute(
+      'href',
+      `/dashboard/projects/${projectFixture.id}/api-keys?environment=live`,
+    );
+    expect(screen.getByRole('button', { name: 'LIVE' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('renames the project through the form', async () => {

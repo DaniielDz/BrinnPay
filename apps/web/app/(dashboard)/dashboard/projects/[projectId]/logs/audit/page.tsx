@@ -212,7 +212,7 @@ export default function ProjectLogsAuditPage() {
     return (
       <section>
         <h1>Audit logs</h1>
-        <p>Loading audit logs…</p>
+        <p className="state state-loading">Loading audit logs…</p>
       </section>
     );
   }
@@ -235,10 +235,10 @@ export default function ProjectLogsAuditPage() {
 
       <p>{entries.length > 0 ? `${entries.length} shown` : ''}</p>
 
-      {listLoading && entries.length === 0 ? <p>Loading audit logs…</p> : null}
+      {listLoading && entries.length === 0 ? <p className="state state-loading">Loading audit logs…</p> : null}
 
       {!listLoading && !listError && entries.length === 0 ? (
-        <p>No audit entries yet.</p>
+        <p className="state">No audit entries yet.</p>
       ) : null}
 
       {entries.length > 0 ? (
