@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../../components/auth/auth-provider';
-import type { AuthSession } from '../../lib/brinnpay/client';
+import type { AuthSession, Payment } from '../../lib/brinnpay/client';
 import ProjectPaymentsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/payments/page';
-import { stubPaymentsApi, unstubPaymentsApi } from './payments-test-utils';
+import { paymentFixtures, stubPaymentsApi, unstubPaymentsApi } from './payments-test-utils';
 import { projectFixture } from './projects-test-utils';
 
 const { paramsMock } = vi.hoisted(() => ({ paramsMock: vi.fn() }));
@@ -108,6 +108,9 @@ describe('payments page (phase 7 §5.2, D1/D2/D3/D5)', () => {
             amount: '12.50',
             currency: 'usd',
             description: 'Monthly plan',
+            // Phase 16 §6.1: the default selection is today's behavior, so an
+            // untouched form still sends exactly `succeed`.
+            scenario: 'succeed',
           }),
         }),
       );
@@ -130,6 +133,10 @@ describe('payments page (phase 7 §5.2, D1/D2/D3/D5)', () => {
     await screen.findByText('$10.00');
     expect(screen.queryByRole('button', { name: 'Create payment' })).not.toBeInTheDocument();
     expect(screen.queryByRole('form', { name: 'Create payment' })).not.toBeInTheDocument();
+    // The phase 16 scenario hook lives inside that form, so a member never
+    // sees it either — presentation gating only; the API still answers 403.
+    expect(screen.queryByRole('combobox', { name: 'Scenario' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Failure code' })).not.toBeInTheDocument();
 
     // Read-only detail stays available (the API enforces anyway).
     fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
@@ -209,5 +216,134 @@ describe('payments page (phase 7 §5.2, D1/D2/D3/D5)', () => {
     );
 
     await screen.findByRole('heading', { level: 1, name: 'Project not found' });
+  });
+});
+
+describe('payments scenario hook (phase 16 §6.1, D9)', () => {
+  it('defaults to current behavior, shows the decline code only for decline, and sends contract-valid values', async () => {
+    setEnvironmentQuery(null);
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    const { fetchMock } = stubPaymentsApi();
+    render(
+      <AuthProvider>
+        <ProjectPaymentsPage />
+      </AuthProvider>,
+    );
+
+    const createButton = await screen.findByRole('button', { name: 'Create payment' });
+    const createForm = screen.getByRole('form', { name: 'Create payment' });
+    const customerSelect = await within(createForm).findByRole('combobox', { name: 'Customer' });
+    await within(customerSelect).findByRole('option', { name: /alice@example.com/ });
+
+    // Default selection = today's behavior; no decline-code sub-control yet.
+    const scenarioSelect = within(createForm).getByRole('combobox', { name: 'Scenario' });
+    expect(scenarioSelect).toHaveValue('succeed');
+    expect(
+      within(createForm).queryByRole('combobox', { name: 'Failure code' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(within(createForm).getByLabelText('Amount (USD)'), { target: { value: '5.00' } });
+    fireEvent.change(scenarioSelect, { target: { value: 'decline' } });
+
+    // The catalog select appears for `decline` and starts on the default code.
+    const codeSelect = await within(createForm).findByRole('combobox', { name: 'Failure code' });
+    expect(codeSelect).toHaveValue('card_declined');
+    fireEvent.change(codeSelect, { target: { value: 'insufficient_funds' } });
+
+    // `timeout` needs no extra input, and the sub-control disappears with it —
+    // the form mirrors the API validity rule (`failure_code` ⇒ `decline`).
+    fireEvent.change(scenarioSelect, { target: { value: 'timeout' } });
+    expect(
+      within(createForm).queryByRole('combobox', { name: 'Failure code' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(scenarioSelect, { target: { value: 'decline' } });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        `http://localhost:3000/api/v1/projects/${projectFixture.id}/payments`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            environment: 'test',
+            customer_id: 'cust-1',
+            amount: '5.00',
+            currency: 'usd',
+            scenario: 'decline',
+            failure_code: 'insufficient_funds',
+          }),
+        }),
+      );
+    });
+  });
+
+  it('renders failure_code on a failed row and omits it when null', async () => {
+    setEnvironmentQuery(null);
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    const declined: Payment = {
+      ...paymentFixtures[0],
+      id: 'pay-declined',
+      amount: '7.00',
+      status: 'failed',
+      failure_code: 'insufficient_funds',
+    };
+    stubPaymentsApi({ payments: [declined, { ...paymentFixtures[1] }] });
+    render(
+      <AuthProvider>
+        <ProjectPaymentsPage />
+      </AuthProvider>,
+    );
+
+    await screen.findByText('$7.00');
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.getByText('insufficient_funds')).toBeInTheDocument();
+    // The succeeded fixture carries `failure_code: null` — nothing to show.
+    expect(screen.queryByText('card_declined')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a scenario 400 as a form error and keeps the input (§11.4)', async () => {
+    setEnvironmentQuery(null);
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    stubPaymentsApi({
+      failCreate: { code: 'VALIDATION_ERROR', message: 'Request validation failed', status: 400 },
+    });
+    render(
+      <AuthProvider>
+        <ProjectPaymentsPage />
+      </AuthProvider>,
+    );
+
+    const createButton = await screen.findByRole('button', { name: 'Create payment' });
+    const createForm = screen.getByRole('form', { name: 'Create payment' });
+    const customerSelect = await within(createForm).findByRole('combobox', { name: 'Customer' });
+    await within(customerSelect).findByRole('option', { name: /alice@example.com/ });
+    fireEvent.change(within(createForm).getByLabelText('Amount (USD)'), { target: { value: '5.00' } });
+    fireEvent.change(within(createForm).getByRole('combobox', { name: 'Scenario' }), {
+      target: { value: 'decline' },
+    });
+    fireEvent.click(createButton);
+
+    // The API message lands in the form's alert; nothing was created.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Request validation failed');
+    expect(within(createForm).getByLabelText('Amount (USD)')).toHaveValue('5.00');
+    expect(within(createForm).getByRole('combobox', { name: 'Scenario' })).toHaveValue('decline');
+  });
+
+  it('viewer role sees the list but no scenario control (presentation gating, D9)', async () => {
+    setEnvironmentQuery(null);
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    stubPaymentsApi({ session: memberSession('user-viewer', 'viewer@example.com', 'Katherine Johnson') });
+    render(
+      <AuthProvider>
+        <ProjectPaymentsPage />
+      </AuthProvider>,
+    );
+
+    await screen.findByRole('heading', { level: 1, name: /Payments/ });
+    await screen.findByText('$10.00');
+    expect(screen.queryByRole('form', { name: 'Create payment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Scenario' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Failure code' })).not.toBeInTheDocument();
   });
 });

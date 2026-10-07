@@ -51,6 +51,7 @@ function paymentRow(
     currency: string;
     status: string;
     failureCode: string | null;
+    simulationScenario: string | null;
     description: string | null;
     createdAt: Date;
     updatedAt: Date;
@@ -65,6 +66,7 @@ function paymentRow(
     currency: overrides.currency ?? 'usd',
     status: overrides.status ?? 'pending',
     failureCode: overrides.failureCode ?? null,
+    simulationScenario: overrides.simulationScenario ?? null,
     description: overrides.description ?? null,
     createdAt: overrides.createdAt ?? past(),
     updatedAt: overrides.updatedAt ?? past(),
@@ -301,7 +303,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
 
       expect(prisma.payment.updateMany).toHaveBeenCalledWith({
         where: { id: PAYMENT_ID, status: 'processing' },
-        data: { status: 'succeeded', updatedAt: expect.any(Date) },
+        data: { status: 'succeeded', failureCode: null, updatedAt: expect.any(Date) },
       });
       expect(page.data[0]).toMatchObject({ status: 'succeeded' });
     });
@@ -321,6 +323,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
         currency: data.currency,
         status: data.status,
         failureCode: data.failureCode,
+        simulationScenario: data.simulationScenario,
         description: data.description,
         createdAt: data.createdAt,
         updatedAt: data.updatedAt,
@@ -818,7 +821,7 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
       );
     });
 
-    it('the default simulation never reaches failed — that edge needs an explicit outcome (D2)', async () => {
+    it('an unflagged payment never reaches failed — that edge needs a persisted decline scenario (D2/§4.3 rule 3)', async () => {
       prisma.payment.findFirst.mockResolvedValue(paymentRow({ status: 'processing' }));
       prisma.payment.updateMany.mockResolvedValue({ count: 1 });
       prisma.payment.findUnique.mockResolvedValue(paymentRow({ status: 'succeeded' }));
@@ -828,9 +831,193 @@ describe('PaymentsService (phase 7 §4.2/§4.6/§4.7, D1/D2/D3/D6/D7/D10)', () =
 
       expect(sink.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.succeeded' }));
       expect(sink.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.failed' }));
-      // The `failed` outcome itself is exercised by the engine unit tests
-      // (payment-simulation.spec.ts) and wired via the `outcome` parameter of
-      // `scheduledTransition` for future sandbox features.
+      // The `failed` edge itself is driven by the persisted scenario and is
+      // exercised in the scenario block below plus the engine unit tests
+      // (payment-simulation.spec.ts).
+    });
+  });
+
+  describe('scenario-driven advancement (phase 16 §4.3/§4.5/§4.6)', () => {
+    it('persists the scenario intent at creation — absent field ⇒ null (§7, D6)', async () => {
+      prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
+      prisma.payment.create.mockImplementation(async ({ data }) => paymentRow(data));
+      const { service } = setup(prisma);
+
+      await service.create(sessionScope(), {
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+        amount: '10.00',
+        currency: 'usd',
+      });
+      await service.create(sessionScope(), {
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+        amount: '10.00',
+        currency: 'usd',
+        scenario: 'decline',
+        failure_code: 'insufficient_funds',
+      });
+      await service.create(sessionScope(), {
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+        amount: '10.00',
+        currency: 'usd',
+        scenario: 'timeout',
+      });
+
+      expect(prisma.payment.create).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ data: expect.objectContaining({ simulationScenario: null }) }),
+      );
+      expect(prisma.payment.create).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          data: expect.objectContaining({ simulationScenario: 'decline:insufficient_funds' }),
+        }),
+      );
+      expect(prisma.payment.create).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ data: expect.objectContaining({ simulationScenario: 'timeout' }) }),
+      );
+    });
+
+    it('the decline default code is resolved at creation (§4.2)', async () => {
+      prisma.customer.findFirst.mockResolvedValue({ id: CUSTOMER_ID });
+      prisma.payment.create.mockImplementation(async ({ data }) => paymentRow(data));
+      const { service } = setup(prisma);
+
+      await service.create(sessionScope(), {
+        environment: 'test',
+        customer_id: CUSTOMER_ID,
+        amount: '10.00',
+        currency: 'usd',
+        scenario: 'decline',
+      });
+
+      expect(prisma.payment.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ simulationScenario: 'decline:card_declined' }),
+        }),
+      );
+    });
+
+    it.each(['card_declined', 'insufficient_funds', 'processing_timeout'] as const)(
+      'decline with %s writes that code in the same CAS as the status (§4.7, AC2/AC3)',
+      async (code) => {
+        prisma.payment.findFirst.mockResolvedValue(
+          paymentRow({ status: 'processing', simulationScenario: `decline:${code}` }),
+        );
+        prisma.payment.updateMany.mockResolvedValue({ count: 1 });
+        prisma.payment.findUnique.mockResolvedValue(
+          paymentRow({ status: 'failed', failureCode: code, simulationScenario: `decline:${code}` }),
+        );
+        const { service, sink, audit } = setup(prisma);
+
+        await expect(service.retrieve(sessionScope(), PAYMENT_ID)).resolves.toMatchObject({
+          status: 'failed',
+          failure_code: code,
+        });
+
+        expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+          where: { id: PAYMENT_ID, status: 'processing' },
+          data: { status: 'failed', failureCode: code, updatedAt: expect.any(Date) },
+        });
+        // All three surfaces are built from the post-edge values (F2): the
+        // event payload and the audit entry both carry the new code.
+        expect(sink.emit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'payment.failed',
+            data: expect.objectContaining({ status: 'failed', failure_code: code }),
+          }),
+        );
+        expect(audit.record.mock.calls[0][1]).toMatchObject({
+          action: 'payment.failed',
+          failure_code: code,
+        });
+      },
+    );
+
+    it('a timed-out payment reaches processing and then never settles (AC5)', async () => {
+      const processing = paymentRow({ status: 'processing', simulationScenario: 'timeout' });
+      prisma.payment.findFirst
+        .mockResolvedValueOnce(paymentRow({ status: 'pending', simulationScenario: 'timeout' }))
+        .mockResolvedValueOnce(processing);
+      prisma.payment.updateMany.mockResolvedValue({ count: 1 });
+      prisma.payment.findUnique.mockResolvedValue(processing);
+      const { service, sink, audit } = setup(prisma);
+
+      // First read: pending → processing (the one edge a timeout ever takes).
+      await expect(service.retrieve(sessionScope(), PAYMENT_ID)).resolves.toMatchObject({
+        status: 'processing',
+      });
+      // Second read: the settlement edge never becomes due, so there is no
+      // write, no terminal event and no audit entry.
+      await expect(service.retrieve(sessionScope(), PAYMENT_ID)).resolves.toMatchObject({
+        status: 'processing',
+        failure_code: null,
+      });
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.payment.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'failed' }) }),
+      );
+      expect(sink.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.succeeded' }));
+      expect(sink.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'payment.failed' }));
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('the sweep due-filter skips a settled timeout payment but still advances a pending one (F8)', async () => {
+      prisma.payment.findMany.mockResolvedValue([]);
+      const { service } = setup(prisma);
+
+      await service.advanceDuePayments(new Date());
+
+      expect(prisma.payment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            createdAt: { lte: expect.any(Date) },
+            OR: [
+              { status: 'pending' },
+              { status: 'processing', simulationScenario: null },
+              { status: 'processing', simulationScenario: { not: 'timeout' } },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('a sweep pass never writes for a timeout payment in processing', async () => {
+      prisma.payment.findMany.mockResolvedValue([
+        paymentRow({ status: 'processing', simulationScenario: 'timeout' }),
+      ]);
+      const { service, sink } = setup(prisma);
+
+      const advanced = await service.advanceDuePayments(new Date());
+
+      expect(advanced).toBe(0);
+      expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+      expect(sink.emit).not.toHaveBeenCalled();
+    });
+
+    it('a pre-Phase 16 row (null scenario) advances exactly as before — success edge, no code (AC1)', async () => {
+      prisma.payment.findFirst.mockResolvedValue(paymentRow({ status: 'processing' }));
+      prisma.payment.updateMany.mockResolvedValue({ count: 1 });
+      prisma.payment.findUnique.mockResolvedValue(paymentRow({ status: 'succeeded' }));
+      const { service, sink, audit } = setup(prisma);
+
+      await service.retrieve(sessionScope(), PAYMENT_ID);
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: PAYMENT_ID, status: 'processing' },
+        data: { status: 'succeeded', failureCode: null, updatedAt: expect.any(Date) },
+      });
+      expect(sink.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'payment.succeeded',
+          data: expect.objectContaining({ failure_code: null }),
+        }),
+      );
+      expect(audit.record.mock.calls[0][1]).not.toHaveProperty('failure_code');
     });
   });
 });

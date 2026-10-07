@@ -160,6 +160,12 @@ model Payment {
   currency    String   @db.VarChar(3)
   status      String   @db.VarChar(20)
   failureCode String?  @map("failure_code") @db.VarChar(50)
+  // Phase 16 §7 (ADR-0031): the create-time simulation intent, app-validated as
+  // a closed enum — `null` (default success), `succeed`, `timeout`, or
+  // `decline:<failure_code>`. Nullable-not-defaulted so pre-existing rows need
+  // no backfill. Deliberately absent from the `Payment` response (D6 (a)); it
+  // is consumed by the advancement sweep, which has no request context.
+  simulationScenario String? @map("simulation_scenario") @db.VarChar(50)
   description String?  @db.VarChar(500)
   createdAt   DateTime @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)

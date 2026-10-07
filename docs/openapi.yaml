@@ -2854,18 +2854,21 @@ components:
           enum: [pending, processing, succeeded, failed]
           description: |
             Payment lifecycle status. The simulation advances payments
-            deterministically from `created_at`: `pending → processing` then
-            `processing → succeeded` (the default-success simulation). Terminal
-            states are absorbing; a payment never leaves `succeeded`/`failed`.
-            The `failed` status is defined (and its transition legal) with no
-            public trigger in this phase — the sandbox controls of a later
-            phase enable it.
+            deterministically from `created_at` and the scenario chosen when
+            the payment was created: `pending → processing`, then on the
+            settlement edge `processing → succeeded` (the default) or
+            `processing → failed` (a `decline` scenario). Terminal states are
+            absorbing; a payment never leaves `succeeded`/`failed`. A `timeout`
+            scenario payment reaches `processing` and never settles, so it
+            stays `processing` indefinitely.
         failure_code:
           type: [string, "null"]
           description: |
             Machine-readable failure reason, `null` unless `status` is
-            `failed`. The failure-code catalog is defined by the sandbox
-            controls of a later phase — always `null` in this phase.
+            `failed`. The catalog is `card_declined` (the default),
+            `insufficient_funds` and `processing_timeout`: a failed payment
+            always carries one of them, and a `pending`, `processing` or
+            `succeeded` payment always carries `null`.
         description:
           type: [string, "null"]
           description: Optional developer-provided description.
@@ -2895,6 +2898,31 @@ components:
           enum: [usd]
         description:
           type: string
+        scenario:
+          type: string
+          enum: [succeed, decline, timeout]
+          default: succeed
+          description: |
+            Create-time simulation scenario, fixed for the life of the payment.
+            Absent behaves exactly like `succeed` (today's default): the payment
+            advances `pending → processing → succeeded` on the normal schedule.
+            `decline` fails on the settlement edge with `failure_code`;
+            `timeout` reaches `processing` and never settles. A closed enum
+            validated at the request boundary, before the idempotency claim: an
+            unknown value or an explicit `null` is a 400 `VALIDATION_ERROR`
+            that creates no payment, no event and no audit entry, and leaves
+            the `Idempotency-Key` reusable.
+          example: decline
+        failure_code:
+          type: string
+          enum: [card_declined, insufficient_funds, processing_timeout]
+          description: |
+            Decline code written to `Payment.failure_code` at the settlement
+            edge. Valid only together with `scenario: "decline"`; with any
+            other scenario, or an explicit `null`, it is a 400
+            `VALIDATION_ERROR`. Omitted with `scenario: "decline"` it defaults
+            to `card_declined`.
+          example: insufficient_funds
 
     Refund:
       type: object
@@ -2986,6 +3014,17 @@ components:
         url:
           type: string
           format: uri
+          description: |
+            Absolute destination URL. When its path carries the exact
+            consecutive segments `sandbox/fail`, `sandbox/timeout` or
+            `sandbox/reject`, deliveries to this endpoint are simulated instead
+            of sent: no outbound HTTP request is made, the attempt is still
+            counted on the unchanged retry ladder (`reject` fails terminally on
+            attempt 1), and the recorded reason is a fixed sanitized summary
+            with `response_status: null`. Detection is an exact segment match,
+            so `/failure-handler` and `/sandbox/webhook` are never simulated.
+            Unmarked endpoints are unaffected and keep receiving signed
+            deliveries.
         event_types:
           type: array
           items:
@@ -3033,6 +3072,11 @@ components:
         url:
           type: string
           format: uri
+          description: |
+            Absolute destination URL, stored as registered. A path carrying the
+            exact segments `sandbox/fail`, `sandbox/timeout` or
+            `sandbox/reject` marks this endpoint for simulated (never sent)
+            deliveries; see `WebhookEndpointCreate.url`.
         event_types:
           type: array
           items:
@@ -3088,6 +3132,17 @@ components:
             Absolute destination URL. Only `http` and `https` are accepted, and
             the URL must satisfy the server's destination policy. Redirects are
             never followed, so the destination must answer directly.
+            Sandbox marker: a path with the exact consecutive segments
+            `sandbox/fail` (simulated network error), `sandbox/timeout`
+            (simulated request timeout) or `sandbox/reject` (simulated terminal
+            rejection, failed on attempt 1) makes every delivery to this
+            endpoint fail without any outbound HTTP request. The attempt still
+            counts on the unchanged retry ladder, the recorded reason is a
+            fixed sanitized summary, and `response_status` stays `null`. The
+            match is on exact segments, so `/failure-handler` and
+            `/sandbox/webhook` are ordinary destinations. The marker never
+            bypasses `enabled`, subscription filtering, retention or rate
+            limits.
         event_types:
           type: array
           minItems: 1
@@ -3110,6 +3165,11 @@ components:
           type: string
           format: uri
           maxLength: 2048
+          description: |
+            Replacement destination URL. The sandbox marker documented on
+            `WebhookEndpointCreate.url` (`sandbox/fail`, `sandbox/timeout`,
+            `sandbox/reject` as exact path segments) is re-evaluated for every
+            attempt, so adding or removing it retargets the simulation.
         event_types:
           type: array
           minItems: 1

@@ -7,10 +7,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BASE_ERROR_CODES,
+  DEFAULT_PAYMENT_FAILURE_CODE,
   IDEMPOTENCY_KEY_MAX_LENGTH,
   IDEMPOTENCY_KEY_MIN_LENGTH,
   IDEMPOTENCY_OPERATION_SCOPES,
   IDEMPOTENCY_RETENTION_HOURS,
+  PAYMENT_FAILURE_CODES,
+  PAYMENT_SCENARIOS,
   RATE_LIMIT_CLASSES,
   RATE_LIMIT_HEADERS,
   RATE_LIMIT_SCOPES,
@@ -23,6 +26,7 @@ import {
   WEBHOOK_SIGNATURE_HEADER,
   WEBHOOK_SIGNATURE_SCHEME,
   WEBHOOK_SIGNED_MESSAGE,
+  WEBHOOK_SIMULATION_ACTIONS,
 } from '../../lib/docs/facts';
 
 /**
@@ -44,6 +48,16 @@ const conventions = readFileSync(join(repoRoot, 'docs', 'api-conventions.md'), '
 const openapiText = readFileSync(join(repoRoot, 'docs', 'openapi.yaml'), 'utf8');
 const errorCodeSource = readFileSync(
   join(repoRoot, 'apps', 'api', 'src', 'common', 'errors', 'error-code.ts'),
+  'utf8',
+);
+/** The API's own scenario catalog — the source the contract was written from. */
+const paymentScenarioSource = readFileSync(
+  join(repoRoot, 'apps', 'api', 'src', 'payments', 'payment-scenario.ts'),
+  'utf8',
+);
+/** The API's own webhook marker detector. */
+const webhookSimulationSource = readFileSync(
+  join(repoRoot, 'apps', 'api', 'src', 'webhooks', 'webhook-simulation.ts'),
   'utf8',
 );
 const document = parseYaml(openapiText) as Record<string, any>;
@@ -273,5 +287,66 @@ describe('D8 — webhook delivery facts (openapi webhooks operations)', () => {
 
     const logs: string = document.paths['/projects/{project_id}/logs/requests'].get.description;
     expect(logs).toContain(`default **${REQUEST_LOG_RETENTION_DAYS} days**`);
+  });
+});
+
+describe('phase 16 D8 — sandbox catalogs (facts vs contract vs API source)', () => {
+  /** The literal `export const NAME = ['a', 'b'] as const;` of an API source. */
+  function apiConstant(source: string, name: string): string[] {
+    const match = source.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const;`));
+    expect(match, `${name} constant not found`).toBeTruthy();
+    return [...(match?.[1] ?? '').matchAll(/'([^']+)'/g)].map((item) => item[1]);
+  }
+
+  it('publishes the scenario catalog declared by PaymentCreate', () => {
+    expect([...PAYMENT_SCENARIOS]).toEqual(apiConstant(paymentScenarioSource, 'PAYMENT_SCENARIOS'));
+    const scenario = document.components.schemas.PaymentCreate.properties.scenario;
+    expect(scenario.enum).toEqual([...PAYMENT_SCENARIOS]);
+    expect(scenario.default).toBe('succeed');
+    expect(scenario.description).toContain('Absent behaves exactly like `succeed`');
+  });
+
+  it('publishes the failure-code catalog declared by PaymentCreate and Payment', () => {
+    expect([...PAYMENT_FAILURE_CODES]).toEqual(apiConstant(paymentScenarioSource, 'FAILURE_CODES'));
+    expect([...PAYMENT_FAILURE_CODES]).toContain(DEFAULT_PAYMENT_FAILURE_CODE);
+
+    const failureCode = document.components.schemas.PaymentCreate.properties.failure_code;
+    expect(failureCode.enum).toEqual([...PAYMENT_FAILURE_CODES]);
+    expect(failureCode.description).toMatch(
+      new RegExp('it defaults\\s+to `' + DEFAULT_PAYMENT_FAILURE_CODE + '`'),
+    );
+
+    // The read side documents the same closed catalog (ADR-0031 §failure_code).
+    const payment: string = JSON.stringify(document.components.schemas.Payment.properties.failure_code);
+    for (const code of PAYMENT_FAILURE_CODES) expect(payment).toContain(code);
+    expect(payment).toContain(DEFAULT_PAYMENT_FAILURE_CODE);
+  });
+
+  it('keeps the scenario outcome table honest against the status description', () => {
+    const status: string = document.components.schemas.Payment.properties.status.description;
+    expect(status).toContain('processing → succeeded');
+    expect(status).toContain('processing → failed');
+    expect(status).toMatch(/never settles/);
+  });
+
+  it('publishes the webhook sandbox markers as exact path segments', () => {
+    expect([...WEBHOOK_SIMULATION_ACTIONS]).toEqual(
+      apiConstant(webhookSimulationSource, 'WEBHOOK_SIMULATION_ACTIONS'),
+    );
+
+    const descriptions = [
+      document.components.schemas.WebhookEndpoint.properties.url.description,
+      document.components.schemas.WebhookEndpointCreate.properties.url.description,
+      document.components.schemas.WebhookEndpointCreated.properties.url.description,
+      document.components.schemas.WebhookEndpointUpdate.properties.url.description,
+    ];
+    for (const description of descriptions) {
+      for (const action of WEBHOOK_SIMULATION_ACTIONS) {
+        expect(String(description), `marker sandbox/${action} missing`).toContain(
+          `sandbox/${action}`,
+        );
+      }
+      expect(String(description)).toMatch(/exact\s+(?:consecutive\s+)?(?:path\s+)?segments/);
+    }
   });
 });

@@ -344,6 +344,20 @@ describe('every documentation route (phase 15 §4, §12 AC2/AC11)', () => {
         );
         expectNoSessionMaterial(container);
       });
+
+      // Phase 16 §10 AC11: the phase 15 claim that no failure trigger exists is
+      // obsolete, and no page may restate it in any wording.
+      itRoute('claims no absence of a failure trigger (phase 16 AC11)', () => {
+        pathnameState.current = entry.href;
+        const { container } = render(
+          <DocsLayout>
+            <entry.Component />
+          </DocsLayout>,
+        );
+        expect(container.textContent ?? '').not.toMatch(
+          /no public trigger for failure|no way to make a payment fail|no scenario triggers|failure scenarios are planned work|no declines or failures/i,
+        );
+      });
     });
   }
 

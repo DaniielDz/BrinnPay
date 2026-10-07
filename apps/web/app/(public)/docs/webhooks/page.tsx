@@ -7,16 +7,21 @@ import { Guide } from '../../../../components/docs/guide';
 import {
   LIST_DELIVERIES,
   REGISTER_WEBHOOK_ENDPOINT,
+  REGISTER_WEBHOOK_MARKER_CURL,
   REPLAY_EVENT,
   VERIFY_SIGNATURE_JS,
   VERIFY_SIGNATURE_PY,
 } from '../../../../lib/docs/examples';
-import { WEBHOOK_EVENT_TYPES, WEBHOOK_RETRY_SCHEDULE_SECONDS } from '../../../../lib/docs/facts';
+import {
+  WEBHOOK_EVENT_TYPES,
+  WEBHOOK_RETRY_SCHEDULE_SECONDS,
+  WEBHOOK_SIMULATION_ACTIONS,
+} from '../../../../lib/docs/facts';
 
 export const metadata: Metadata = {
   title: 'Webhooks — BrinnPay',
   description:
-    'Register webhook endpoints, verify HMAC-SHA256 signatures against the raw body, understand at-least-once delivery, retries, replay and 30-day event retention.',
+    'Register webhook endpoints, verify HMAC-SHA256 signatures against the raw body, understand at-least-once delivery, retries, replay, 30-day event retention and sandbox failure markers.',
 };
 
 /** Resource path and the documented signed message, exactly as contracted. */
@@ -42,6 +47,16 @@ const DELIVERY_HEADERS: { header: string; purpose: string }[] = [
 
 const RETRYABLE = 'Network errors and timeouts, plus 408, 425, 429 and every 5xx.';
 const TERMINAL = 'Any other 4xx and every 3xx — never retried.';
+
+/**
+ * Sandbox destination markers (phase 16 §5): the outcome each `sandbox/<action>`
+ * path segment produces, mapped onto the ordinary classification table above.
+ */
+const SANDBOX_MARKERS: { action: (typeof WEBHOOK_SIMULATION_ACTIONS)[number]; outcome: string }[] = [
+  { action: 'fail', outcome: 'Retryable — a simulated network error.' },
+  { action: 'timeout', outcome: 'Retryable — a simulated request timeout.' },
+  { action: 'reject', outcome: 'Terminal — failed on the first attempt, never retried.' },
+];
 
 /**
  * Webhooks guide (phase 15 §5.9): registration, the one-time signing secret,
@@ -227,6 +242,72 @@ export default function WebhooksPage() {
         <p className="hint">
           <code>last_error</code> on a delivery is a bounded, sanitized summary: never a
           destination response body, never credentials.
+        </p>
+      </section>
+
+      <section aria-labelledby="webhooks-sandbox">
+        <h2 id="webhooks-sandbox">Simulated destination failures</h2>
+        <p>
+          To exercise your receiver&rsquo;s retry handling without standing up a failing server,
+          register an endpoint whose URL path contains the exact consecutive segments{' '}
+          <code>sandbox/&lt;action&gt;</code>, where <code>action</code> is{' '}
+          {WEBHOOK_SIMULATION_ACTIONS.map((action, index) => (
+            <span key={action}>
+              {index > 0
+                ? index === WEBHOOK_SIMULATION_ACTIONS.length - 1
+                  ? ' or '
+                  : ', '
+                : null}
+              <code>{action}</code>
+            </span>
+          ))}
+          . Nothing changes at registration — the marker is evaluated when an attempt is made.
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Marker</th>
+                <th scope="col">Attempt classified as</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SANDBOX_MARKERS.map((marker) => (
+                <tr key={marker.action}>
+                  <th scope="row">
+                    <code>sandbox/{marker.action}</code>
+                  </th>
+                  <td>{marker.outcome}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <CodeExampleList examples={[REGISTER_WEBHOOK_MARKER_CURL]} />
+        <ul>
+          <li>
+            The simulated attempt replaces the HTTP request only. Endpoint{' '}
+            <code>enabled</code> gating, subscription filtering, retention, rate limits and the
+            destination policy all still apply.
+          </li>
+          <li>
+            No outbound request is made, so <code>response_status</code> stays{' '}
+            <code>null</code> and no <code>BrinnPay-Signature</code> is sent.{' '}
+            <code>last_error</code> records a fixed sanitized reason — never the URL.
+          </li>
+          <li>
+            Attempt counting, classification and backoff run through the same bookkeeping as a
+            real attempt: <code>fail</code> and <code>timeout</code> ride the five-attempt
+            ladder, <code>reject</code> is terminal on attempt 1. Replay behaves as usual.
+          </li>
+        </ul>
+        <p className="hint">
+          The match is on whole path segments and on the path only:{'} '}
+          <code>/failure-handler</code>, <code>/sandbox/webhooks</code> (no action) and{' '}
+          <code>?x=/sandbox/fail</code> are ordinary destinations.
+        </p>
+        <p>
+          <Link href="/docs/sandbox">What the sandbox simulates →</Link>
         </p>
       </section>
 

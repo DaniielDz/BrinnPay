@@ -163,8 +163,11 @@ export default function QuickstartPage() {
         </p>
         <CodeExampleList examples={[RETRIEVE_PAYMENT]} />
         <p>
-          <strong>Expected:</strong> <code>status: "succeeded"</code>. This is the
-          default-success simulation — every payment in the sandbox follows it today.{' '}
+          <strong>Expected:</strong> <code>status: &quot;succeeded&quot;</code>. This payment
+          carried no <code>scenario</code>, and the default scenario is success — every
+          unflagged payment in the sandbox follows it. Pass{' '}
+          <code>scenario: &quot;decline&quot;</code> or <code>scenario: &quot;timeout&quot;</code>{' '}
+          on the create instead to watch a payment fail or stall.{' '}
           <Link href="/docs/sandbox">What the sandbox simulates →</Link>
         </p>
       </section>

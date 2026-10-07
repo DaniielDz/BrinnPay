@@ -6,8 +6,10 @@ import { CodeExampleList } from '../../../../components/docs/code-block';
 import { Guide } from '../../../../components/docs/guide';
 import {
   CREATE_PAYMENT_CURL,
+  CREATE_PAYMENT_DECLINE_CURL,
   CREATE_PAYMENT_JS,
   CREATE_PAYMENT_PY,
+  CREATE_PAYMENT_TIMEOUT_CURL,
   LIST_PAYMENTS,
   PAYMENT_RESPONSE_EXAMPLE,
   RETRIEVE_PAYMENT,
@@ -16,7 +18,7 @@ import {
 export const metadata: Metadata = {
   title: 'Payments — BrinnPay',
   description:
-    'Create, retrieve and list simulated BrinnPay payments: required fields, money format, the pending → processing → succeeded simulation, idempotency and authorization.',
+    'Create, retrieve and list simulated BrinnPay payments: required fields, money format, the pending → processing → succeeded simulation, scenario selection (decline, timeout), idempotency and authorization.',
 };
 
 const CREATE_FIELDS: { field: string; required: string; note: string }[] = [
@@ -25,6 +27,16 @@ const CREATE_FIELDS: { field: string; required: string; note: string }[] = [
   { field: 'amount', required: 'yes', note: 'Decimal string, e.g. "10.00". Strictly positive.' },
   { field: 'currency', required: 'yes', note: 'usd — the only currency in the MVP.' },
   { field: 'description', required: 'no', note: 'Your own note, returned on the payment.' },
+  {
+    field: 'scenario',
+    required: 'no',
+    note: 'succeed (default) | decline | timeout — the outcome to simulate.',
+  },
+  {
+    field: 'failure_code',
+    required: 'no',
+    note: 'card_declined (default) | insufficient_funds | processing_timeout — only with scenario: "decline".',
+  },
 ];
 
 /** Resource paths, exactly as the contract declares them. */
@@ -43,7 +55,7 @@ export default function PaymentsPage() {
   return (
     <Guide
       title="Payments"
-      lead="Payments are simulated end to end: create one, watch it advance from pending to succeeded, list it with cursor pagination, and refund it afterwards."
+      lead="Payments are simulated end to end: create one, watch it advance from pending to succeeded (or ask for a decline or a timeout), list it with cursor pagination, and refund it afterwards."
       sources={['docs/openapi.yaml', 'docs/api-conventions.md']}
     >
       <Callout title="Simulated payments" tone="warning">
@@ -121,6 +133,20 @@ export default function PaymentsPage() {
           response instead of creating a second payment.{' '}
           <Link href="/docs/idempotency">Idempotency →</Link>
         </p>
+        <p>
+          To simulate a non-default outcome, add <code>scenario</code> (and, for a decline,{' '}
+          <code>failure_code</code>). The create response is identical in shape either way —
+          the chosen outcome is never disclosed at creation:
+        </p>
+        <CodeExampleList
+          examples={[CREATE_PAYMENT_DECLINE_CURL, CREATE_PAYMENT_TIMEOUT_CURL]}
+        />
+        <p className="hint">
+          <code>failure_code</code> is valid only with <code>scenario: &quot;decline&quot;</code>;
+          anywhere else it is a <code>400</code>. Both fields are validated before the
+          idempotency key is claimed, so a rejected request leaves the key reusable.{' '}
+          <Link href="/docs/sandbox">Failure scenarios →</Link>
+        </p>
       </section>
 
       <section aria-labelledby="payments-read">
@@ -162,23 +188,25 @@ export default function PaymentsPage() {
           </li>
           <li className="docs-stat">
             <strong>failed</strong>
-            <span>Terminal — defined, not triggered today.</span>
+            <span>Terminal — reached with a decline scenario.</span>
           </li>
         </ul>
         <p>
-          The simulation advances <code>pending → processing</code> and then{' '}
-          <code>processing → succeeded</code>. Progression is derived from the payment&rsquo;s
-          creation time rather than from an in-memory timer, so it survives restarts and is
-          reproducible. Terminal states are absorbing: a payment never leaves{' '}
+          The simulation advances <code>pending → processing</code> and then, for the default
+          scenario, <code>processing → succeeded</code>. Progression is derived from the
+          payment&rsquo;s creation time rather than from an in-memory timer, so it survives
+          restarts and is reproducible. Terminal states are absorbing: a payment never leaves{' '}
           <code>succeeded</code> or <code>failed</code>.
         </p>
-        <Callout title="Current behavior" tone="note">
+        <Callout title="Scenarios" tone="note">
           <p>
-            Every simulated payment follows the default-success path today. The{' '}
-            <code>failed</code> status and its transition exist in the model, but{' '}
-            <strong>no public trigger for failure is exposed in this version</strong>: there is
-            no decline, timeout or failure switch to flip. Failure scenarios are planned work,
-            not current behavior.
+            Every payment follows the default-success path unless the create request asked for
+            something else. <code>scenario: &quot;decline&quot;</code> sends{' '}
+            <code>processing → failed</code> and emits <code>payment.failed</code> carrying the{' '}
+            <code>failure_code</code>; <code>scenario: &quot;timeout&quot;</code> stops at{' '}
+            <code>processing</code> forever, so no terminal event is ever emitted and a refund
+            answers <code>422</code>. The outcome is observable on the payment and its
+            webhooks — never in the create response.
           </p>
         </Callout>
         <p>

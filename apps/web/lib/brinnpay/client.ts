@@ -671,13 +671,41 @@ export function deleteCustomer(accessToken: string, projectId: string, customerI
 }
 
 // ---------------------------------------------------------------------------
-// Payments (phase 7 §4.2/§5.2)
+// Payments (phase 7 §4.2/§5.2; phase 16 §4.2/§4.5 scenario fields)
 // ---------------------------------------------------------------------------
 
-/** `Payment` as contracted (phase 7 §4.2): the simulation lifetime, `amount`
- *  as a decimal string (`MoneyAmount`, ADR-0002), `currency` always `usd`
- *  (ADR-0003), `failure_code` `null` unless the payment ever `failed`.
- *  `status` advances automatically on read (default-success simulation). */
+/**
+ * The closed create-time scenario catalog (phase 16 §4.2, D1 (a)).
+ *
+ * Mirrors the API's `PAYMENT_SCENARIOS` constant so the browser can render a
+ * select whose options are exactly the values the boundary accepts — the API
+ * remains the enforcement point; this is presentation and typing only. Absent
+ * (or `succeed`) is today's default-success behavior.
+ */
+export const PAYMENT_SCENARIOS = ['succeed', 'decline', 'timeout'] as const;
+export type PaymentScenario = (typeof PAYMENT_SCENARIOS)[number];
+
+/** The phase 16 §4.5 failure-code catalog (D4), in catalog order. */
+export const FAILURE_CODES = ['card_declined', 'insufficient_funds', 'processing_timeout'] as const;
+export type FailureCode = (typeof FAILURE_CODES)[number];
+
+/** Catalog default when `scenario: "decline"` omits `failure_code`. */
+export const DEFAULT_FAILURE_CODE: FailureCode = 'card_declined';
+
+export function isPaymentScenario(value: string): value is PaymentScenario {
+  return (PAYMENT_SCENARIOS as readonly string[]).includes(value);
+}
+
+export function isFailureCode(value: string): value is FailureCode {
+  return (FAILURE_CODES as readonly string[]).includes(value);
+}
+
+/** `Payment` as contracted (phase 7 §4.2, extended by phase 16): the
+ *  simulation lifetime, `amount` as a decimal string (`MoneyAmount`,
+ *  ADR-0002), `currency` always `usd` (ADR-0003), and `failure_code` — a
+ *  phase 16 catalog value when `status` is `failed`, `null` otherwise (the
+ *  create-time `scenario` itself is deliberately not projected, D6 (a)).
+ *  `status` advances automatically on read. */
 export interface Payment {
   id: string;
   project_id: string;
@@ -703,15 +731,20 @@ export interface PaymentCustomerOption {
   name: string | null;
 }
 
-/** `PaymentCreate` (phase 7 §4.2): environment (required — the page always
- *  passes the shell-selected environment, D1), customer_id, amount and
- *  currency; description optional. */
+/** `PaymentCreate` (phase 7 §4.2, extended by phase 16 §4.2): environment
+ *  (required — the page always passes the shell-selected environment, D1),
+ *  customer_id, amount and currency; `description` optional. `scenario` and
+ *  `failure_code` are the optional sandbox fields — `failure_code` is only
+ *  sent with `scenario: "decline"`, which is the validity rule the API
+ *  enforces at the boundary. */
 export interface CreatePaymentInput {
   environment: Environment;
   customer_id: string;
   amount: string;
   currency: 'usd';
   description?: string;
+  scenario?: PaymentScenario;
+  failure_code?: FailureCode;
 }
 
 export interface ListPaymentsQuery {

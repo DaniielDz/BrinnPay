@@ -83,6 +83,9 @@ describe('payments smoke test (phase 7 §5.2)', () => {
             customer_id: 'cust-1',
             amount: '99.99',
             currency: 'usd',
+            // Phase 16 §6.1: an untouched scenario control is today's
+            // behavior, so the default selection is sent explicitly.
+            scenario: 'succeed',
           }),
         }),
       );

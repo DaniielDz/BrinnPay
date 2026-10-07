@@ -4,15 +4,21 @@ import Link from 'next/link';
 import { Callout } from '../../../../components/docs/callout';
 import { CodeExampleList } from '../../../../components/docs/code-block';
 import { Guide } from '../../../../components/docs/guide';
-import { RETRIEVE_PAYMENT } from '../../../../lib/docs/examples';
+import {
+  CREATE_PAYMENT_DECLINE_CURL,
+  CREATE_PAYMENT_TIMEOUT_CURL,
+  REGISTER_WEBHOOK_MARKER_CURL,
+  RETRIEVE_PAYMENT,
+} from '../../../../lib/docs/examples';
+import { PAYMENT_FAILURE_CODES, PAYMENT_SCENARIOS, WEBHOOK_SIMULATION_ACTIONS } from '../../../../lib/docs/facts';
 
 export const metadata: Metadata = {
   title: 'Sandbox — BrinnPay',
   description:
-    'What the BrinnPay sandbox simulates: no real money and no real card data, the default-success payment simulation, and exactly which behaviors exist today.',
+    'What the BrinnPay sandbox simulates: no real money and no real card data, the payment scenario catalog (success, decline, timeout), webhook destination markers, and exactly which behaviors exist today.',
 };
 
-/** Sandbox guide (phase 15 §5.12, D6: implemented behavior only). */
+/** Sandbox guide (phase 15 §5.12 D6, extended by phase 16 §6.2 D9). */
 export default function SandboxPage() {
   return (
     <Guide
@@ -63,7 +69,10 @@ export default function SandboxPage() {
             <tbody>
               <tr>
                 <th scope="row">Payments</th>
-                <td>Create, retrieve and list; the pending → processing → succeeded progression.</td>
+                <td>
+                  Create, retrieve and list; the pending → processing → succeeded progression,
+                  plus an opt-in <code>scenario</code> that produces a decline or a timeout.
+                </td>
               </tr>
               <tr>
                 <th scope="row">Refunds</th>
@@ -77,7 +86,7 @@ export default function SandboxPage() {
                 <th scope="row">Webhooks</th>
                 <td>
                   Signed delivery, retries with backoff, replay, delivery inspection — including
-                  receivers on localhost.
+                  receivers on localhost — and sandbox destination markers that force failures.
                 </td>
               </tr>
               <tr>
@@ -97,11 +106,12 @@ export default function SandboxPage() {
       </section>
 
       <section aria-labelledby="sandbox-success">
-        <h2 id="sandbox-success">The default-success simulation</h2>
+        <h2 id="sandbox-success">The default scenario: success</h2>
         <p>
-          Every payment follows the same path: <code>pending → processing → succeeded</code>.
-          Progression is derived from the payment&rsquo;s creation time rather than from an
-          in-memory timer, so it is reproducible and survives restarts.
+          Omit <code>scenario</code> — or send <code>scenario: &quot;succeed&quot;</code> — and
+          the payment follows <code>pending → processing → succeeded</code>. Progression is
+          derived from the payment&rsquo;s creation time rather than from an in-memory timer, so
+          it is reproducible and survives restarts.
         </p>
         <p>Observe it by polling — or watch it happen on the dashboard payments page:</p>
         <CodeExampleList examples={[RETRIEVE_PAYMENT]} />
@@ -111,6 +121,212 @@ export default function SandboxPage() {
         </p>
         <p>
           <Link href="/docs/payments">Payments →</Link>
+        </p>
+      </section>
+
+      <section aria-labelledby="sandbox-scenarios">
+        <h2 id="sandbox-scenarios">Failure scenarios</h2>
+        <p>
+          Passing <code>scenario</code> on payment creation selects an outcome from a closed
+          catalog of{' '}
+          {PAYMENT_SCENARIOS.map((scenario, index) => (
+            <span key={scenario}>
+              {index > 0 ? (index === PAYMENT_SCENARIOS.length - 1 ? ' or ' : ', ') : null}
+              <code>{scenario}</code>
+            </span>
+          ))}
+          . The outcome is <strong>not disclosed in the create response</strong> — it arrives
+          the same way it would in production, by observing the payment and the webhook events
+          it emits.
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">
+                  <code>scenario</code>
+                </th>
+                <th scope="col">What the sandbox does</th>
+                <th scope="col">Final status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">
+                  <code>succeed</code>
+                </th>
+                <td>
+                  The default. Omitting <code>scenario</code> behaves exactly like this value.
+                </td>
+                <td>
+                  <code>succeeded</code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <code>decline</code>
+                </th>
+                <td>
+                  Settles <code>failed</code> at the processing edge and emits{' '}
+                  <code>payment.failed</code> with the chosen <code>failure_code</code>.
+                </td>
+                <td>
+                  <code>failed</code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <code>timeout</code>
+                </th>
+                <td>
+                  Moves <code>pending → processing</code> and stops there: no terminal event is
+                  ever emitted, and a refund answers <code>422</code>.
+                </td>
+                <td>
+                  <code>processing</code> (never settles)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="hint">
+          A timed-out payment never completes: <code>retrieve</code> and{' '}
+          <code>list</code> keep returning <code>processing</code>,{' '}
+          <code>failure_code</code> stays <code>null</code>, and no terminal event is ever
+          emitted. Treat a prolonged non-terminal state as <strong>not yet resolved</strong> —
+          keep polling or wait for the webhook rather than assuming the payment failed.
+        </p>
+        <p>
+          A decline additionally selects <code>failure_code</code> — valid{' '}
+          <strong>only</strong> with <code>scenario: &quot;decline&quot;</code> — from the closed
+          catalog:
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">
+                  <code>failure_code</code>
+                </th>
+                <th scope="col">Meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">
+                  <code>{PAYMENT_FAILURE_CODES[0]}</code> (default)
+                </th>
+                <td>The simulated authorization was declined.</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <code>{PAYMENT_FAILURE_CODES[1]}</code>
+                </th>
+                <td>The simulated funding source had insufficient funds.</td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <code>{PAYMENT_FAILURE_CODES[2]}</code>
+                </th>
+                <td>
+                  The simulated authorization attempt timed out and the payment failed. This is
+                  a <em>decline</em> code — it is unrelated to the separate{' '}
+                  <code>timeout</code> scenario, which never settles at all.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>A minimal correct request for each non-default outcome:</p>
+        <CodeExampleList
+          examples={[CREATE_PAYMENT_DECLINE_CURL, CREATE_PAYMENT_TIMEOUT_CURL]}
+        />
+        <Callout title="Validation happens before anything is committed" tone="note">
+          <p>
+            An unknown <code>scenario</code> or <code>failure_code</code>, a{' '}
+            <code>failure_code</code> sent without <code>scenario: &quot;decline&quot;</code>,
+            or an explicit <code>null</code> are <code>400 VALIDATION_ERROR</code>s. The
+            rejection happens before the idempotency key is claimed, so the same{' '}
+            <code>Idempotency-Key</code> stays usable after you fix the request.
+          </p>
+        </Callout>
+        <p>
+          <Link href="/docs/payments">Payments →</Link>
+        </p>
+      </section>
+
+      <section aria-labelledby="sandbox-webhook-marker">
+        <h2 id="sandbox-webhook-marker">Webhook destination markers</h2>
+        <p>
+          A webhook endpoint URL whose path contains the exact consecutive segments{' '}
+          <code>sandbox/&lt;action&gt;</code> is classified as a simulated destination — nothing
+          special happens at registration, only when a delivery is attempted.{' '}
+          <code>action</code> is one of{' '}
+          {WEBHOOK_SIMULATION_ACTIONS.map((action, index) => (
+            <span key={action}>
+              {index > 0
+                ? index === WEBHOOK_SIMULATION_ACTIONS.length - 1
+                  ? ' or '
+                  : ', '
+                : null}
+              <code>{action}</code>
+            </span>
+          ))}
+          .
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">
+                  <code>sandbox/&lt;action&gt;</code>
+                </th>
+                <th scope="col">How the attempt is classified</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">
+                  <code>sandbox/fail</code>
+                </th>
+                <td>
+                  A retryable failure (<code>500</code>-class): the delivery is retried inside
+                  the usual 5-attempt ladder, then ends <code>failed</code>.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <code>sandbox/timeout</code>
+                </th>
+                <td>
+                  A retryable timeout — same ladder, no response status recorded.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">
+                  <code>sandbox/reject</code>
+                </th>
+                <td>
+                  A terminal failure (<code>4xx</code>-class): the delivery fails immediately
+                  and is never retried.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <CodeExampleList examples={[REGISTER_WEBHOOK_MARKER_CURL]} />
+        <p className="hint">
+          The match is on whole path segments, so <code>/sandbox/webhooks</code> (a{' '}
+          <code>sandbox</code> segment without an action) and <code>/failure-handler</code> are
+          ordinary destinations. The marker replaces the HTTP attempt only: it never bypasses
+          endpoint <code>enabled</code> gating, subscriptions, retention, rate limits or the
+          destination policy. No outbound request is made, so no{' '}
+          <code>BrinnPay-Signature</code> is sent — signing stays “HMAC over exactly the bytes
+          sent”. Everything else — attempt counting, classification, backoff and replay — runs
+          through the same bookkeeping as a real attempt.
+        </p>
+        <p>
+          <Link href="/docs/webhooks">Webhooks →</Link>
         </p>
       </section>
 
@@ -124,23 +340,31 @@ export default function SandboxPage() {
         </Callout>
         <ul>
           <li>
-            <strong>No declines or failures.</strong> There is no way to make a payment fail:
-            the <code>failed</code> status exists in the model, but nothing exposes a trigger
-            for it, and <code>failure_code</code> is always <code>null</code>.
+            <strong>No test cards or card data.</strong> There is no card field anywhere: the
+            scenario catalog is the only input that changes an outcome.
           </li>
           <li>
-            <strong>No timeouts or slow paths.</strong> The simulation always advances on its
-            schedule.
+            <strong>No chargebacks, disputes or issuer rules.</strong> They are outside the
+            modeled surface.
           </li>
           <li>
-            <strong>No webhook failure scenarios.</strong> Deliveries are made to whatever your
-            endpoint answers; there is no switch that produces destination errors — although a
-            destination you control can answer any way you like, which is enough to exercise
-            your own retry handling.
+            <strong>No mid-flight forcing.</strong> A scenario is fixed at creation; you cannot
+            move an already-created payment between outcomes, and terminal states remain
+            absorbing.
           </li>
           <li>
-            <strong>No scenario triggers.</strong> There are no test cards, trigger phrases or
-            special amounts that change an outcome.
+            <strong>No project-wide default scenario.</strong> <code>scenario</code> is
+            per-request only — there is no setting that changes the outcome of unflagged
+            payments.
+          </li>
+          <li>
+            <strong>No forced rate limits or arbitrary error injection.</strong> 429s come from
+            the published operation budgets; there is no switch that fabricates a specific
+            HTTP error for an endpoint.
+          </li>
+          <li>
+            <strong>No refund or dispute scenarios.</strong> Refunds complete synchronously
+            against a succeeded payment; nothing makes a refund fail or time out.
           </li>
         </ul>
         <p className="hint">
