@@ -5,6 +5,7 @@ import { AuthProvider } from '../components/auth/auth-provider';
 import '../styles/tokens.css';
 import '../styles/base.css';
 import '../styles/public.css';
+import '../styles/docs.css';
 import '../styles/auth.css';
 import '../styles/dashboard.css';
 
