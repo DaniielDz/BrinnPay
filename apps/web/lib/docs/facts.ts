@@ -68,6 +68,37 @@ export const WEBHOOK_EVENT_TYPES: readonly string[] = [
 ];
 
 /**
+ * Payment scenario catalog (phase 16 §4.2, D1 (a)) — the closed enum of the
+ * optional `PaymentCreate.scenario` field. Absent behaves exactly like
+ * `succeed`, which is the pre-phase 16 default.
+ */
+export const PAYMENT_SCENARIOS: readonly string[] = ['succeed', 'decline', 'timeout'];
+
+/**
+ * Failure-code catalog (phase 16 §4.5, D4) — the closed set a decline writes
+ * into `Payment.failure_code`, and the set the guide's table publishes.
+ */
+export const PAYMENT_FAILURE_CODES: readonly string[] = [
+  'card_declined',
+  'insufficient_funds',
+  'processing_timeout',
+];
+
+/** Catalog default when `scenario: "decline"` omits `failure_code` (§4.5). */
+export const DEFAULT_PAYMENT_FAILURE_CODE = 'card_declined';
+
+/**
+ * Webhook sandbox marker (phase 16 §5.1, D5 (a)): exact consecutive path
+ * segments `sandbox/<action>` anywhere in the registered destination URL. The
+ * match is on whole segments, so `/failure-handler` and `/sandbox/webhook` are
+ * ordinary destinations.
+ */
+export const WEBHOOK_SIMULATION_PATH_SEGMENT = 'sandbox';
+
+/** The closed marker token set of `sandbox/<action>` (§5.1). */
+export const WEBHOOK_SIMULATION_ACTIONS: readonly string[] = ['fail', 'timeout', 'reject'];
+
+/**
  * Rate-limit operation classes with the sandbox default numbers
  * (`docs/api-conventions.md` §10.2, published as §5.11 of the guide inventory;
  * the same table appears in `docs/openapi.yaml` `info.description`).

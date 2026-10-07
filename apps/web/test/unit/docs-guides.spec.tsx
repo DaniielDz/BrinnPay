@@ -79,7 +79,13 @@ describe('quickstart (phase 15 §5.2, D4)', () => {
     expect(guide.text).toContain('sk_test_...');
     expect(guide.text).toMatch(/TEST environment|test" environment/);
     // Nothing that does not exist may be required (D6, §14).
-    expect(guide.text).not.toMatch(/\bdeclin|\bfailure scenario|\bCLI\b|\bsdk\b/i);
+    expect(guide.text).not.toMatch(/\bCLI\b|\bsdk\b/i);
+  });
+
+  it('names the scenario catalog instead of promising universal success (phase 16 §6.2)', () => {
+    expect(guide.text).toMatch(/scenario: "decline"/);
+    expect(guide.text).toMatch(/scenario: "timeout"/);
+    expect(guide.text).toMatch(/every unflagged payment/i);
   });
 });
 
@@ -212,14 +218,26 @@ describe('payments (phase 15 §5.6)', () => {
     expect(guide.text).toMatch(/only currency in the MVP/i);
   });
 
-  it('documents the simulated state machine and the absence of a failure trigger', () => {
+  it('documents the simulated state machine and its scenario-driven failures', () => {
     expect(guide.text).toContain('pending');
     expect(guide.text).toContain('processing');
     expect(guide.text).toContain('succeeded');
     expect(guide.text).toContain('failed');
-    expect(guide.text).toMatch(/no public trigger for failure is exposed/i);
+    expect(guide.text).toMatch(/processing → failed/);
+    expect(guide.text).toMatch(/scenario: "decline"/);
+    expect(guide.text).toMatch(/never disclosed at creation/i);
     expect(guide.text).toMatch(/survives restarts/i);
     expect(guide.text).toMatch(/Observe the progression by polling/i);
+  });
+
+  it('lists scenario and failure_code as optional create fields (phase 16 §6.2)', () => {
+    expect(guide.text).toContain('scenario');
+    expect(guide.text).toContain('failure_code');
+    expect(guide.text).toContain('succeed (default) | decline | timeout');
+    expect(guide.text).toContain(
+      'card_declined (default) | insufficient_funds | processing_timeout',
+    );
+    expect(guide.text).toMatch(/only with scenario: "decline"/i);
   });
 
   it('documents environment scoping, idempotency and who may create', () => {
@@ -523,10 +541,24 @@ describe('sandbox (phase 15 §5.12, D6)', () => {
 
   it('documents only implemented behavior', () => {
     expect(guide.text).toMatch(/pending → processing → succeeded/);
-    expect(guide.text).toMatch(/No declines or failures/i);
-    expect(guide.text).toMatch(/no way to make a payment fail/i);
-    expect(guide.text).toMatch(/No scenario triggers/i);
+    expect(guide.text).toMatch(/Failure scenarios/);
+    expect(guide.text).toMatch(/The outcome is not disclosed in the create response/i);
+    expect(guide.text).toMatch(/sandbox\/<action>/);
     expect(guide.text).toMatch(/do not build against them/i);
+    // What is still out of scope must stay out of scope.
+    expect(guide.text).toMatch(/No test cards or card data/i);
+    expect(guide.text).toMatch(/No project-wide default scenario/i);
+    expect(guide.text).toMatch(/No refund or dispute scenarios/i);
+  });
+
+  it('publishes the scenario and failure-code catalogs (phase 16 §6.2)', () => {
+    for (const scenario of ['succeed', 'decline', 'timeout']) {
+      expect(guide.text).toContain(scenario);
+    }
+    for (const code of ['card_declined', 'insufficient_funds', 'processing_timeout']) {
+      expect(guide.text).toContain(code);
+    }
+    expect(guide.text).toMatch(/card_declined \(default\)/);
   });
 });
 

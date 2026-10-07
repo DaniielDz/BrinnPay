@@ -235,6 +235,43 @@ export const CREATE_PAYMENT_NO_KEY: CodeExample = {
   ].join('\n'),
 };
 
+/**
+ * Create a payment with an explicit decline scenario (phase 16 §4.2, §4.5).
+ * `failure_code` is valid only with `scenario: "decline"`; omit it and the
+ * catalog default `card_declined` is used.
+ */
+export const CREATE_PAYMENT_DECLINE_CURL: CodeExample = {
+  label: 'cURL — decline',
+  language: 'bash',
+  code: [
+    'curl -sS -X POST "$BRINNPAY/projects/$PROJECT_ID/payments" \\',
+    '  -H "Authorization: Bearer sk_test_..." \\',
+    '  -H "Content-Type: application/json" \\',
+    '  -H "Idempotency-Key: <your-idempotency-key>" \\',
+    `  -d '{"environment":"test","customer_id":"${CUSTOMER_ID}","amount":"10.00","currency":"usd","scenario":"decline","failure_code":"insufficient_funds"}'`,
+    '',
+    '# 201 "pending" — the outcome is not disclosed here. Poll the payment:',
+    '# it settles "failed" with "failure_code":"insufficient_funds".',
+    '# Omit "failure_code" to get the default "card_declined".',
+  ].join('\n'),
+};
+
+/** Create a payment with an explicit timeout scenario (phase 16 §4.2). */
+export const CREATE_PAYMENT_TIMEOUT_CURL: CodeExample = {
+  label: 'cURL — timeout',
+  language: 'bash',
+  code: [
+    'curl -sS -X POST "$BRINNPAY/projects/$PROJECT_ID/payments" \\',
+    '  -H "Authorization: Bearer sk_test_..." \\',
+    '  -H "Content-Type: application/json" \\',
+    '  -H "Idempotency-Key: <your-idempotency-key>" \\',
+    `  -d '{"environment":"test","customer_id":"${CUSTOMER_ID}","amount":"10.00","currency":"usd","scenario":"timeout"}'`,
+    '',
+    '# 201 "pending". The payment moves pending → processing and never settles:',
+    '# "payment.succeeded"/"payment.failed" are never emitted and a refund is 422.',
+  ].join('\n'),
+};
+
 /** Poll a payment until the simulation has advanced it. */
 export const RETRIEVE_PAYMENT: CodeExample = {
   label: 'cURL',
@@ -243,7 +280,10 @@ export const RETRIEVE_PAYMENT: CodeExample = {
     'curl -sS "$BRINNPAY/projects/$PROJECT_ID/payments/<your_payment_id>" \\',
     '  -H "Authorization: Bearer sk_test_..."',
     '',
-    '# Re-run until "status" is "succeeded": pending → processing → succeeded.',
+    '# Re-run until the payment settles:',
+    '#   default/succeed → pending → processing → succeeded',
+    '#   decline         → pending → processing → failed (with "failure_code")',
+    '#   timeout         → pending → processing → stays "processing"',
   ].join('\n'),
 };
 
@@ -400,6 +440,27 @@ export const REGISTER_WEBHOOK_ENDPOINT: CodeExample = {
     '',
     '# 201 → the response includes "signing_secret" once. Copy it now:',
     '# it cannot be read back or rotated — delete and recreate instead.',
+  ].join('\n'),
+};
+
+/**
+ * Register an endpoint whose URL carries the sandbox marker (phase 16 §5.1):
+ * the exact consecutive path segments `sandbox/fail`.
+ */
+export const REGISTER_WEBHOOK_MARKER_CURL: CodeExample = {
+  label: 'cURL — sandbox marker',
+  language: 'bash',
+  code: [
+    'curl -sS -X POST "$BRINNPAY/projects/$PROJECT_ID/webhook-endpoints" \\',
+    '  -H "Authorization: Bearer sk_test_..." \\',
+    '  -H "Content-Type: application/json" \\',
+    `  -d '{"environment":"test","url":"https://example.com/webhooks/sandbox/fail","event_types":["payment.succeeded","payment.failed"]}'`,
+    '',
+    '# "sandbox/fail" is the marker: deliveries to this URL answer 500 so the',
+    '# five-attempt retry ladder can be exercised end to end. "sandbox/timeout"',
+    '# and "sandbox/reject" classify differently — see the webhooks guide.',
+    '# /sandbox/webhooks (no trailing action) and /failure-handler are ordinary',
+    '# destinations: the match is on whole path segments.',
   ].join('\n'),
 };
 
