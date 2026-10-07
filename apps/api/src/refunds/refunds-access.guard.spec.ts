@@ -29,6 +29,7 @@ const PAYMENT_ROW = {
   customerId: '0192f2a0-0000-7000-8000-0000000000e1',
   description: null,
   failureCode: null,
+  simulationScenario: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   project: {

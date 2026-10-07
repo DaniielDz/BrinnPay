@@ -13,8 +13,8 @@ export function isPaymentStatus(value: string): value is PaymentStatus {
 /** `Payment` as contracted (phase 7 §4.2): `amount` is a decimal string
  *  (ADR-0002 — BigInt minor units are converted before any JSON
  *  serialization), `currency` is always `usd` in the MVP (ADR-0003),
- *  `failure_code` is `null` unless `status = failed` (catalog is Phase 16),
- *  and `description` is `null` when absent (D9). */
+ *  `failure_code` is `null` unless `status = failed`, where it holds a value of
+ *  the phase 16 §4.5 catalog, and `description` is `null` when absent (D9). */
 export interface PaymentResponse {
   id: string;
   project_id: string;
@@ -39,6 +39,14 @@ export interface PaymentRow {
   currency: string;
   status: string;
   failureCode: string | null;
+  /**
+   * The persisted scenario intent (phase 16 §7, ADR-0031). `null` means
+   * default success; the closed-enum value is written at creation and read back
+   * by the advancement sweep. It is deliberately **not** projected onto
+   * {@link PaymentResponse} (D6 (a)) — the row type carries it because the
+   * simulation consumes it.
+   */
+  simulationScenario: string | null;
   description: string | null;
   createdAt: Date;
   updatedAt: Date;

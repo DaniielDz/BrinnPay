@@ -25,6 +25,12 @@ import type { PaymentCreateDto } from './dto/payment-create.dto';
 import type { PaymentListQueryDto } from './dto/payment-list-query.dto';
 import type { PaymentEvent, PaymentEventType } from './payment-events';
 import {
+  DEFAULT_FAILURE_CODE,
+  parseSimulationScenario,
+  scenarioColumnValue,
+  type FailureCode,
+} from './payment-scenario';
+import {
   PAYMENT_DELAYS,
   scheduledTransition,
   type LegalTransition,
@@ -73,11 +79,13 @@ type EdgeOutcome = 'applied' | 'lost' | 'rolled-back';
  *   operation scope `payments.create`, so a same-project, same-scope retry
  *   inside the 24-hour window replays the stored 201 `Payment` instead of
  *   creating a second payment or emitting a second `payment.created`;
- * - the default-success simulation (D2): payment creation arms the schedule
- *   (status `pending`); lazy, guarded, compare-and-set advancement on read
- *   (list and retrieve) — `pending → processing → succeeded`; `failed` is
- *   defined (column, transition legality, event) but has no public trigger in
- *   Phase 7 (Phase 16 sandbox);
+ * - the simulation (D2, extended by phase 16 §4.3): payment creation arms the
+ *   schedule (status `pending`); lazy, guarded, compare-and-set advancement on
+ *   read (list and retrieve) — `pending → processing → succeeded` by default.
+ *   Phase 16 §4.2 adds an optional create-time `scenario` that persists on the
+ *   row: `decline` picks the `failed` settlement edge and writes a catalog
+ *   `failure_code` in the same update, `timeout` never settles, and an absent
+ *   scenario is exactly today's default success (§4.3 rule 3);
  * - event emission (D10, phase 10 §5.3/D2): `payment.created` on create;
  *   `payment.succeeded`/`payment.failed` when the terminal edge is applied —
  *   through the webhooks module's `WEBHOOK_EVENT_PORT`. The port persists the
@@ -190,6 +198,12 @@ export class PaymentsService {
             currency: dto.currency,
             status: 'pending',
             failureCode: null,
+            // Phase 16 §4.2/§7 (ADR-0031): the scenario intent is fixed at
+            // creation and read back by the sweep minutes later, which has no
+            // request context. `null` for an unflagged create is exactly the
+            // pre-Phase 16 row shape, so existing rows and requests behave
+            // identically (§4.3 rule 3).
+            simulationScenario: scenarioColumnValue(dto.scenario, dto.failure_code),
             description,
             createdAt: now,
             updatedAt: now,
@@ -329,8 +343,25 @@ export class PaymentsService {
     );
     const due = await this.prisma.payment.findMany({
       where: {
-        status: { in: ['pending', 'processing'] },
         createdAt: { lte: scheduleCompleteAt },
+        // Scenario-aware (phase 16 F8/§16): a `timeout` payment in `processing`
+        // has no settlement edge and never will, so it must not occupy a batch
+        // slot on every pass — that is the global-scan pressure Phase 10
+        // already flagged, and unbounded timeout usage would grow it. A `timeout`
+        // payment still in `pending` **is** due (it must reach `processing`).
+        //
+        // Written as an explicit disjunction rather than a single `not` because
+        // `simulation_scenario` is nullable: `column <> 'timeout'` is NULL, not
+        // true, for the pre-Phase 16 rows that make up every existing payment.
+        // The disjunction is strictly narrower than
+        // `status IN ('pending','processing')`, which is the predicate of the
+        // partial index `payments_open_created_at_id_idx`, so the sweep keeps
+        // using it.
+        OR: [
+          { status: 'pending' },
+          { status: 'processing', simulationScenario: null },
+          { status: 'processing', simulationScenario: { not: 'timeout' } },
+        ],
       },
       orderBy: { id: 'asc' },
       take: batchSize,
@@ -377,8 +408,14 @@ export class PaymentsService {
    * call wins the CAS (an event fires exactly once per edge). Re-reads the
    * authoritative row whenever a transition was due so the caller never
    * returns a stale snapshot after contention.
+   *
+   * The persisted scenario is read once from the row the caller already holds
+   * and handed to the pure engine (§16): `decline` chooses the `failed`
+   * settlement edge and carries its catalog `failure_code`, `timeout` yields no
+   * settlement edge at all, and a null/unrecognized value is default success.
    */
   private async advance(row: PaymentRow, now: Date): Promise<PaymentRow> {
+    const intent = parseSimulationScenario(row.simulationScenario);
     let current = row;
     let wrote = false;
     let due = false;
@@ -390,13 +427,19 @@ export class PaymentsService {
         { status: current.status as PaymentStatus, createdAt: current.createdAt },
         now,
         this.delays,
+        intent.scenario,
       );
       if (!transition) {
         break;
       }
       due = true;
 
-      const outcome = await this.applyEdge(current, transition, now);
+      // Only the `failed` edge writes a code (phase 16 §4.7); every other edge
+      // writes `null`, which is already the stored value — the invariant
+      // "non-failed ⇒ failure_code IS NULL" therefore holds by construction.
+      const failureCode: FailureCode | null =
+        transition.to === 'failed' ? (intent.failureCode ?? DEFAULT_FAILURE_CODE) : null;
+      const outcome = await this.applyEdge(current, transition, now, failureCode);
       if (outcome !== 'applied') {
         // `lost`: a concurrent writer applied this edge (or holds a newer state);
         // never advance or regress from a stale snapshot.
@@ -406,7 +449,7 @@ export class PaymentsService {
       }
 
       wrote = true;
-      current = { ...current, status: transition.to, updatedAt: now };
+      current = { ...current, status: transition.to, failureCode, updatedAt: now };
     }
 
     if (!wrote && !due) {
@@ -498,6 +541,11 @@ export class PaymentsService {
    * error before the event insert lost the event permanently, because the
    * payment was already terminal and no later pass re-derived the edge.
    *
+   * `failureCode` is written **in the same CAS update** as the status (phase 16
+   * §4.7, finding F2): the API response, the `payment.failed` payload and the
+   * audit entry are all derived from the post-edge values below, so the three
+   * surfaces can never disagree, and a rollback leaves none of them behind.
+   *
    * A rollback is logged rather than propagated: it must not fail the read that
    * triggered it, and because the status change did not commit, the next read or
    * sweep pass re-applies the edge and retries the event.
@@ -506,6 +554,7 @@ export class PaymentsService {
     current: PaymentRow,
     transition: LegalTransition,
     now: Date,
+    failureCode: FailureCode | null,
   ): Promise<EdgeOutcome> {
     let claimed = false;
     // Captured inside the transaction so the delivery is scheduled after it
@@ -516,14 +565,21 @@ export class PaymentsService {
         async (tx) => {
           const result = await tx.payment.updateMany({
             where: { id: current.id, status: transition.from },
-            data: { status: transition.to, updatedAt: now },
+            data: { status: transition.to, failureCode, updatedAt: now },
           });
           if (result.count === 0) {
             return; // lost the race; nothing was written
           }
           claimed = true;
           if (transition.event) {
-            const updated = { ...current, status: transition.to, updatedAt: now };
+            // Post-edge values: the code was written with the status above, so
+            // the payload and the audit entry describe the row as committed.
+            const updated: PaymentRow = {
+              ...current,
+              status: transition.to,
+              failureCode,
+              updatedAt: now,
+            };
             const event = this.paymentEvent(transition.event, updated, now);
             eventId = event.id;
             await this.events.persist(tx, event);
@@ -544,7 +600,7 @@ export class PaymentsService {
               tx,
               transition.event === 'payment.succeeded'
                 ? { action: 'payment.succeeded', ...terminal }
-                : { action: 'payment.failed', ...terminal, failure_code: current.failureCode },
+                : { action: 'payment.failed', ...terminal, failure_code: updated.failureCode },
             );
           }
         },

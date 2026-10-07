@@ -1,0 +1,35 @@
+-- Phase 16 — Sandbox: scenario persistence.
+--
+-- Adds the single nullable column ADR-0031 / §7 allows for the create-time
+-- simulation intent. The outcome of a payment is consumed minutes later by the
+-- advancement sweep (`PaymentsService.advanceDuePayments`) and by read-time
+-- catch-up, both of which run with no request context, so the intent has to live
+-- on the row (finding F1) — an in-memory option would not survive a restart, and
+-- reusing `failure_code` would break the null-unless-failed invariant.
+--
+-- Shape (app-validated closed enum, phase 4 D10 pattern — no CHECK constraint,
+-- matching `status`/`environment`/`currency`):
+--
+--   NULL                    default success — exactly the pre-Phase 16 behavior
+--                           for every existing row, so there is no backfill and
+--                           "absent" and "succeed" are the same state
+--   'succeed'               explicit success request
+--   'timeout'               never settles (stays `processing`, D3 (a))
+--   'decline:<code>'        fails at the settlement edge with that catalog
+--                           code, e.g. 'decline:card_declined'. The decline
+--                           code rides this column because §7 permits exactly
+--                           one new column and forbids pre-storing it in
+--                           `failure_code` (which stays NULL until a payment
+--                           fails).
+--
+-- Nullable, not defaulted, no rewrite: `ADD COLUMN` takes no table rewrite on
+-- PostgreSQL, and no existing row needs a value — a NULL scenario is read as
+-- default success by `parseSimulationScenario`.
+--
+-- No index change: `payments_open_created_at_id_idx` stays keyed on
+-- ("created_at", "id") with predicate `status IN ('pending','processing')`.
+-- The sweep's new scenario-aware filter is strictly narrower than that
+-- predicate, so the partial index still covers it.
+
+-- AlterTable
+ALTER TABLE "payments" ADD COLUMN "simulation_scenario" VARCHAR(50);
