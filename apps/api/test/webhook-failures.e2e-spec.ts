@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -462,5 +463,123 @@ describe('webhook failure modes (Phase 10, real PostgreSQL + Redis + worker)', (
     }, 'the delivery past the horizon to be delivered');
     expect(delivered.attempts).toBe(1);
     expect(received.some((item) => item.url === '/beyond-horizon')).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 16 §5 — destination simulation via URL marker (AC7, D5, ADR-0032)
+  //
+  // The classification is unit-tested as a pure function; this is the layer
+  // that proves the *worker* honors it end to end: the ladder runs on the
+  // unchanged env-driven backoff, terminal states land on the aggregate, and
+  // the receiver — the spy below — never sees a single request for a marked
+  // URL, while an unmarked endpoint on the same event keeps getting real
+  // signed deliveries (§5.2 rule 5, rule 1).
+  // -------------------------------------------------------------------------
+
+  it('a marked URL runs the whole ladder with zero outbound requests; an unmarked twin still delivers signed (AC7/§5.2)', async () => {
+    requireDependencies(available);
+    const { token, projectId, customerId, endpointsUrl } = await setup('marker');
+
+    const marked = await subscribe(token, endpointsUrl, '/sandbox/fail');
+    const control = await subscribe(token, endpointsUrl, '/marker-control');
+    const secret = control.body.signing_secret as string;
+    const payment = await createPayment(token, projectId, customerId);
+
+    // Retryable class: the simulated failure rides the full ladder
+    // (WEBHOOK_MAX_ATTEMPTS = 5, near-zero env-driven backoff).
+    const delivery = await waitFor(async () => {
+      const row = await deliveryFor(marked.body.id as string);
+      return row && row.status === 'failed' ? row : null;
+    }, 'the marked delivery to exhaust the retry ladder');
+
+    expect(delivery.attempts).toBe(5);
+    expect(delivery.responseStatus).toBeNull();
+    expect(delivery.lastError).toBe('simulated network error (sandbox)');
+    expect(delivery.nextAttemptAt).toBeNull();
+    // §5.2 rule 1: five attempts ran and the receiver saw no request at all.
+    expect(received.filter((item) => (item.url ?? '').startsWith('/sandbox/'))).toHaveLength(0);
+
+    // The unmarked endpoint on the same event is unaffected: one real,
+    // signed delivery whose signature verifies against the create-time secret.
+    const controlDelivery = await waitFor(async () => {
+      const row = await deliveryFor(control.body.id as string);
+      return row && row.status === 'delivered' ? row : null;
+    }, 'the unmarked control endpoint to be delivered');
+    expect(controlDelivery.attempts).toBe(1);
+
+    const attempt = received.find((item) => item.url === '/marker-control');
+    expect(attempt).toBeDefined();
+    const body = JSON.parse(attempt!.rawBody);
+    expect(body).toMatchObject({
+      type: 'payment.created',
+      data: { id: payment.body.id },
+    });
+    const signature = String(attempt!.headers['brinnpay-signature']);
+    expect(signature).toMatch(/^t=\d{10},v1=[0-9a-f]{64}$/);
+    const [, provided] = signature.split(',v1=');
+    const timestamp = signature.slice(2, signature.indexOf(','));
+    const expected = createHmac('sha256', secret)
+      .update(`${timestamp}.${attempt!.rawBody}`, 'utf8')
+      .digest();
+    expect(timingSafeEqual(Buffer.from(provided, 'hex'), expected)).toBe(true);
+  });
+
+  it('reject is terminal on the first attempt with no outbound request (AC7/§5.2 rule 4)', async () => {
+    requireDependencies(available);
+    const { token, projectId, customerId, endpointsUrl } = await setup('marker-reject');
+
+    const endpoint = await subscribe(token, endpointsUrl, '/sandbox/reject');
+    await createPayment(token, projectId, customerId);
+
+    const delivery = await waitFor(async () => {
+      const row = await deliveryFor(endpoint.body.id as string);
+      return row && row.status === 'failed' ? row : null;
+    }, 'the rejected delivery to settle terminal');
+
+    expect(delivery.attempts).toBe(1);
+    expect(delivery.responseStatus).toBeNull();
+    expect(delivery.lastError).toBe('simulated rejection (sandbox)');
+    expect(delivery.nextAttemptAt).toBeNull();
+    expect(
+      received.filter((item) => (item.url ?? '').startsWith('/sandbox/reject')),
+    ).toHaveLength(0);
+  });
+
+  it('a replay to a marked endpoint is simulated identically (AC7/§5.2 rule 5)', async () => {
+    requireDependencies(available);
+    const { token, projectId, customerId, endpointsUrl } = await setup('marker-replay');
+
+    const endpoint = await subscribe(token, endpointsUrl, '/sandbox/timeout');
+    await createPayment(token, projectId, customerId);
+
+    const original = await waitFor(async () => {
+      const row = await deliveryFor(endpoint.body.id as string);
+      return row && row.status === 'failed' ? row : null;
+    }, 'the original marked delivery to fail');
+    expect(original.attempts).toBe(5);
+    expect(original.responseStatus).toBeNull();
+    expect(original.lastError).toBe('simulated request timeout (sandbox)');
+
+    const event = await prisma.webhookEvent.findFirstOrThrow({
+      where: { projectId, type: 'payment.created' },
+    });
+    await call(token)
+      .post(`${endpointsUrl}/${endpoint.body.id}/events/${event.id}/replay`)
+      .expect(202);
+
+    const replay = await waitFor(async () => {
+      const row = await prisma.webhookDelivery.findFirst({
+        where: { endpointId: endpoint.body.id as string, isReplay: true },
+      });
+      return row && row.status === 'failed' ? row : null;
+    }, 'the replayed marked delivery to fail the same way');
+
+    expect(replay.attempts).toBe(5);
+    expect(replay.responseStatus).toBeNull();
+    expect(replay.lastError).toBe('simulated request timeout (sandbox)');
+    expect(replay.nextAttemptAt).toBeNull();
+    expect(received.filter((item) => (item.url ?? '').includes('/sandbox/'))).toHaveLength(0);
+    // A replay is a new delivery of the same event — never a second event row.
+    expect(await prisma.webhookEvent.count({ where: { projectId } })).toBe(1);
   });
 });

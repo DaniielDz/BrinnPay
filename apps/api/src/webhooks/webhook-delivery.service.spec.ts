@@ -555,3 +555,149 @@ describe('webhook delivery error surface', () => {
     fetchStub.restore();
   });
 });
+
+describe('simulated destinations — the URL marker (phase 16 §5, D5 (a); ADR-0032)', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** The standard aggregate addressed at a marked (or look-alike) URL. */
+  function deliveryTo(
+    url: string,
+    overrides: Partial<ReturnType<typeof delivery>> = {},
+  ): ReturnType<typeof delivery> {
+    const base = delivery();
+    return { ...base, ...overrides, endpoint: { ...base.endpoint, url } };
+  }
+
+  it.each([
+    ['fail', 'simulated network error (sandbox)', 'retry'],
+    ['timeout', 'simulated request timeout (sandbox)', 'retry'],
+    ['reject', 'simulated rejection (sandbox)', 'failed'],
+  ] as const)(
+    '/sandbox/%s makes zero HTTP requests but still records the attempt',
+    async (action, reason, expected) => {
+      const fetchStub = stubFetch(() => ({ status: 200 }));
+      const { service, queue, updates } = setup(deliveryTo(`https://example.com/sandbox/${action}`));
+
+      await expect(service.attempt(DELIVERY_ID)).resolves.toBe(expected);
+
+      // §5.2 rule 1: the whole point is that no receiver is needed.
+      expect(fetchStub.calls).toHaveLength(0);
+      // §5.2 rule 2: unlike a destination-policy denial, a simulated failure
+      // stands in *for* a request and counts as one.
+      expect(updates()[0]).toEqual(
+        expect.objectContaining({
+          attempts: 1,
+          responseStatus: null,
+          lastError: reason,
+        }),
+      );
+      if (expected === 'retry') {
+        expect(updates()[0].status).toBeUndefined(); // still pending
+        expect(updates()[0].nextAttemptAt).toBeInstanceOf(Date);
+        // The unchanged ladder still schedules the next attempt.
+        expect(queue.enqueueDelivery).toHaveBeenCalledWith(DELIVERY_ID, 2, expect.any(Number));
+      } else {
+        expect(updates()[0]).toEqual(
+          expect.objectContaining({ status: 'failed', nextAttemptAt: null }),
+        );
+        expect(queue.enqueueDelivery).not.toHaveBeenCalled();
+      }
+      fetchStub.restore();
+    },
+  );
+
+  it('advances the unchanged ladder until the attempt budget is exhausted', async () => {
+    const fetchStub = stubFetch(() => ({ status: 200 }));
+    const { service, queue, updates } = setup(
+      deliveryTo('https://example.com/sandbox/fail', { attempts: POLICY.maxAttempts - 1 }),
+    );
+
+    await expect(service.attempt(DELIVERY_ID)).resolves.toBe('failed');
+
+    expect(fetchStub.calls).toHaveLength(0);
+    expect(queue.enqueueDelivery).not.toHaveBeenCalled();
+    expect(updates()[0]).toEqual(
+      expect.objectContaining({
+        status: 'failed',
+        attempts: POLICY.maxAttempts,
+        responseStatus: null,
+        lastError: 'simulated network error (sandbox)',
+      }),
+    );
+    fetchStub.restore();
+  });
+
+  it('keeps the destination-policy denial ahead of the marker (§5.2 rule 6)', async () => {
+    const fetchStub = stubFetch(() => ({ status: 200 }));
+    const { service, queue, updates } = setup(
+      deliveryTo('https://example.com/sandbox/fail'),
+      1,
+      { denylist: ['example.com'] },
+    );
+
+    await expect(service.attempt(DELIVERY_ID)).resolves.toBe('failed');
+
+    // The policy wins, counts no attempt, and never reaches the simulation.
+    expect(fetchStub.calls).toHaveLength(0);
+    expect(queue.enqueueDelivery).not.toHaveBeenCalled();
+    expect(updates()[0]).toEqual(
+      expect.objectContaining({
+        status: 'failed',
+        attempts: 0,
+        lastError: expect.stringContaining('destination policy'),
+      }),
+    );
+    fetchStub.restore();
+  });
+
+  it('never decrypts the signing secret — no signature exists for bytes not sent (§8 rule 6)', async () => {
+    const fetchStub = stubFetch(() => ({ status: 200 }));
+    const row = deliveryTo('https://example.com/sandbox/reject');
+    row.endpoint.secretCipher = Buffer.from('tampered').toString('base64');
+    const { service, updates } = setup(row);
+
+    // On the real path a tampered secret is terminal; a marked destination never
+    // reaches the signing code at all, so it simulates instead.
+    await expect(service.attempt(DELIVERY_ID)).resolves.toBe('failed');
+    expect(fetchStub.calls).toHaveLength(0);
+    expect(updates()[0].lastError).toBe('simulated rejection (sandbox)');
+    fetchStub.restore();
+  });
+
+  it('applies to a replayed delivery exactly as it does to a first delivery', async () => {
+    const fetchStub = stubFetch(() => ({ status: 200 }));
+    const { service, updates } = setup(deliveryTo('https://example.com/sandbox/fail', { isReplay: true }));
+
+    await expect(service.attempt(DELIVERY_ID)).resolves.toBe('retry');
+
+    expect(fetchStub.calls).toHaveLength(0);
+    expect(updates()[0]).toEqual(
+      expect.objectContaining({ attempts: 1, lastError: 'simulated network error (sandbox)' }),
+    );
+    fetchStub.restore();
+  });
+
+  it.each([
+    'https://example.com/failure-handler',
+    'https://example.com/sandbox/webhook',
+    'https://example.com/hooks/mysandbox/fail',
+    'https://example.com/webhook?target=/sandbox/fail',
+  ])('an unmarked look-alike %s still performs the real signed request', async (url) => {
+    const fetchStub = stubFetch(() => ({ status: 200 }));
+    const { service, updates } = setup(deliveryTo(url));
+
+    await expect(service.attempt(DELIVERY_ID)).resolves.toBe('delivered');
+
+    expect(fetchStub.calls).toHaveLength(1);
+    expect(headersOf(fetchStub.calls[0].init)['BrinnPay-Signature']).toMatch(
+      /^t=\d{10},v1=[0-9a-f]{64}$/,
+    );
+    expect(updates()[0]).toEqual(
+      expect.objectContaining({ status: 'delivered', attempts: 1, responseStatus: 200 }),
+    );
+    fetchStub.restore();
+  });
+});

@@ -20,6 +20,7 @@ import {
   WEBHOOK_DELIVERY_POLICY,
   type WebhookDeliveryPolicy,
 } from './webhook-queue.service';
+import { simulatedAttempt } from './webhook-simulation';
 import { assertDestinationAllowed, WEBHOOK_DESTINATIONS, type DestinationPolicy } from './webhook-url';
 
 /** Statuses whose `Retry-After` header is honored (D6). */
@@ -59,6 +60,13 @@ interface AttemptTarget {
  * **Nothing sensitive is retained or logged.** Response bodies are discarded
  * without being read, a bounded sanitized summary is stored instead, and the
  * signing secret never appears in a log line or an error.
+ *
+ * **Simulated destinations (phase 16 §5, ADR-0032).** An endpoint whose URL
+ * carries the documented `/sandbox/<action>` marker has its HTTP attempt
+ * replaced by a fixed simulated outcome: no outbound request, no signature, and
+ * a recorded reason that counts as a real attempt. The marker is evaluated
+ * after the destination-policy check so a policy denial still wins and still
+ * counts no attempt.
  */
 @Injectable()
 export class WebhookDeliveryService {
@@ -124,41 +132,57 @@ export class WebhookDeliveryService {
     }
 
     const attemptNumber = delivery.attempts + 1;
-    // Serialized once per attempt from the stored envelope: the exact bytes that
-    // are transmitted are the exact bytes that were signed.
-    // The stored `payload` **is** the envelope (§4.3.2), so serializing it is what
-    // the destination receives; the cast is a structural assertion, not a
-    // transformation.
-    const body = serializeEnvelope(delivery.event.payload as unknown as WebhookEnvelope);
-    const timestamp = Math.floor(Date.now() / 1000);
+
+    // Phase 16 §5.2 / ADR-0032: the simulation marker is a classification step
+    // *beside* the destination-policy short-circuit above, never inside it, so
+    // the two attempt-counting semantics stay legible — a policy denial counts
+    // no attempt because no request may be made at all, while a simulated
+    // failure stands in *for* a request and counts one. The marker replaces the
+    // HTTP attempt only: no outbound request, no signature and no secret
+    // decryption happen, so it cannot probe or amplify traffic and no signature
+    // is ever emitted for bytes that were not sent. Everything downstream —
+    // attempt bookkeeping, the retry ladder, backoff, dashboard inspection and
+    // replay — is the real machinery (§5.2 rule 2).
+    const simulated = simulatedAttempt(delivery.endpoint.url);
 
     let outcome: SendResult;
-    try {
-      const secret = decryptWebhookSecret(
-        {
-          ciphertext: delivery.endpoint.secretCipher,
-          iv: delivery.endpoint.secretIv,
-          authTag: delivery.endpoint.secretAuthTag,
-        },
-        this.secretKey,
-      );
-      outcome = await this.send(delivery.endpoint.url, body, {
-        secret,
-        timestamp,
-        deliveryId: delivery.id,
-        eventId: delivery.eventId,
-        eventType: delivery.event.type,
-        attempt: attemptNumber,
-      });
-    } catch (error) {
-      // A tampered or undecryptable secret must not retry forever; the record
-      // is terminal and the endpoint has to be recreated (D8).
-      outcome = {
-        kind: 'failed',
-        reason: `stored signing secret could not be decrypted: ${sanitizeErrorSummary(error)}`,
-        responseStatus: null,
-        retryAfter: null,
-      };
+    if (simulated) {
+      outcome = simulated;
+    } else {
+      // Serialized once per attempt from the stored envelope: the exact bytes
+      // that are transmitted are the exact bytes that were signed.
+      // The stored `payload` **is** the envelope (§4.3.2), so serializing it is what
+      // the destination receives; the cast is a structural assertion, not a
+      // transformation.
+      const body = serializeEnvelope(delivery.event.payload as unknown as WebhookEnvelope);
+      const timestamp = Math.floor(Date.now() / 1000);
+      try {
+        const secret = decryptWebhookSecret(
+          {
+            ciphertext: delivery.endpoint.secretCipher,
+            iv: delivery.endpoint.secretIv,
+            authTag: delivery.endpoint.secretAuthTag,
+          },
+          this.secretKey,
+        );
+        outcome = await this.send(delivery.endpoint.url, body, {
+          secret,
+          timestamp,
+          deliveryId: delivery.id,
+          eventId: delivery.eventId,
+          eventType: delivery.event.type,
+          attempt: attemptNumber,
+        });
+      } catch (error) {
+        // A tampered or undecryptable secret must not retry forever; the record
+        // is terminal and the endpoint has to be recreated (D8).
+        outcome = {
+          kind: 'failed',
+          reason: `stored signing secret could not be decrypted: ${sanitizeErrorSummary(error)}`,
+          responseStatus: null,
+          retryAfter: null,
+        };
+      }
     }
 
     if (outcome.kind === 'delivered') {
