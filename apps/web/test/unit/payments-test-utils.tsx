@@ -69,6 +69,8 @@ const fail = (
 export interface PaymentsApiBehaviour {
   /** When set, every payments route returns this code (e.g. NOT_FOUND). */
   failPayments?: string;
+  /** When set, `POST /payments` answers with this error (e.g. a scenario 400). */
+  failCreate?: { code: string; message: string; status: number };
   session?: AuthSession;
   payments?: Payment[];
 }
@@ -127,6 +129,9 @@ export function stubPaymentsApi(behaviour: PaymentsApiBehaviour = {}) {
       if (paymentsListPath) {
         if (behaviour.failPayments) return fail(behaviour.failPayments, 'Project not found', 404);
         if (method === 'POST') {
+          if (behaviour.failCreate) {
+            return fail(behaviour.failCreate.code, behaviour.failCreate.message, behaviour.failCreate.status);
+          }
           const body = JSON.parse(String(init?.body ?? '{}')) as CreatePaymentInput;
           const created: Payment = {
             id: 'pay-new',

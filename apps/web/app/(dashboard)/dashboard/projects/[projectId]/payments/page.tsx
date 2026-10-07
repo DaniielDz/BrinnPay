@@ -6,8 +6,12 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 
 import { useAuth } from '../../../../../../components/auth/auth-provider';
 import {
+  DEFAULT_FAILURE_CODE,
+  FAILURE_CODES,
   createPayment,
   isEnvironment,
+  isFailureCode,
+  isPaymentScenario,
   isTerminalPayment,
   listCustomers,
   listMembers,
@@ -15,27 +19,33 @@ import {
   retrievePayment,
   retrieveProject,
   type Environment,
+  type FailureCode,
   type Payment,
+  type PaymentScenario,
   type Project,
   type Role,
 } from '../../../../../../lib/brinnpay/client';
 
-/** The simulation advances `pending → processing → succeeded` within seconds
- *  of creation (defaults 1000/2000 ms), so a while-any-non-terminal poll makes
- *  the lifecycle visible without hammering the API. */
+/** The simulation advances `pending → processing` within seconds of creation
+ *  (defaults 1000/2000 ms) and then settles — `succeeded` by default, `failed`
+ *  for a `decline` scenario, and never for `timeout` — so a while-any-non-terminal
+ *  poll makes the lifecycle visible without hammering the API. A timed-out
+ *  payment simply keeps displaying `processing`. */
 const PAYMENT_POLL_MS = 3_000;
 
 /**
- * Payments page (phase 7 §5.2): the placeholder replaced by the payments UI
- * inside the project shell. The page operates on the environment from the
- * shell selector (`?environment=`, default `test`) — TEST/LIVE data is never
- * mixed (D1). List + cursor pagination + a refresh button; while any visible
- * payment is non-terminal the page polls so the default-success simulation
- * (D2) becomes visible. Create for owner/admin per the capability matrix
- * (§4.3, D5) with a customer select scoped to the same (project, environment)
- * (D3); member/viewer keep the read-only list and detail; a non-member sees
- * the not-found state. The API remains the enforcement point — UI hiding is
- * presentation only.
+ * Payments page (phase 7 §5.2, scenario hook phase 16 §6.1/D9): the
+ * placeholder replaced by the payments UI inside the project shell. The page
+ * operates on the environment from the shell selector (`?environment=`,
+ * default `test`) — TEST/LIVE data is never mixed (D1). List + cursor
+ * pagination + a refresh button; while any visible payment is non-terminal the
+ * page polls so the simulation becomes visible. Create for owner/admin per the
+ * capability matrix (§4.3, D5) with a customer select scoped to the same
+ * (project, environment) (D3) plus the phase 16 scenario select — default
+ * `succeed`, with the failure-code select shown only for `decline`; member/viewer
+ * keep the read-only list and detail; a non-member sees the not-found state.
+ * The scenario control is presentation gating only: the API remains the
+ * enforcement point (403 without the capability regardless of the field).
  */
 export default function ProjectPaymentsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -58,6 +68,10 @@ export default function ProjectPaymentsPage() {
   const [createCustomerId, setCreateCustomerId] = useState('');
   const [createAmount, setCreateAmount] = useState('');
   const [createDescription, setCreateDescription] = useState('');
+  // Phase 16 §6.1 (D9): default selection is today's behavior; the decline
+  // code sub-control only exists for `decline`.
+  const [createScenario, setCreateScenario] = useState<PaymentScenario>('succeed');
+  const [createFailureCode, setCreateFailureCode] = useState<FailureCode>(DEFAULT_FAILURE_CODE);
 
   const [selected, setSelected] = useState<Payment | null>(null);
 
@@ -198,11 +212,17 @@ export default function ProjectPaymentsPage() {
         amount,
         currency: 'usd',
         ...(description !== '' ? { description } : {}),
+        // Phase 16 §4.2: `failure_code` is only ever sent with `scenario:
+        // "decline"` — the same validity rule the API enforces at the boundary.
+        scenario: createScenario,
+        ...(createScenario === 'decline' ? { failure_code: createFailureCode } : {}),
       });
       // The API orders by UUIDv7 id ascending (oldest first), so the new
       // record lands at the end; refetch the current window.
       setCreateAmount('');
       setCreateDescription('');
+      setCreateScenario('succeed');
+      setCreateFailureCode(DEFAULT_FAILURE_CODE);
       await loadPayments(null);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Unable to create payment');
@@ -305,6 +325,41 @@ export default function ProjectPaymentsPage() {
               onChange={(event) => setCreateDescription(event.target.value)}
             />
           </label>
+          <label>
+            Scenario
+            <select
+              name="scenario"
+              value={createScenario}
+              onChange={(event) => {
+                const value = event.target.value;
+                setCreateScenario(isPaymentScenario(value) ? value : 'succeed');
+              }}
+            >
+              <option value="succeed">succeed — default success</option>
+              <option value="decline">decline — fails at settlement</option>
+              <option value="timeout">timeout — never settles</option>
+            </select>
+          </label>
+          {createScenario === 'decline' ? (
+            <label>
+              Failure code
+              <select
+                name="failure_code"
+                value={createFailureCode}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setCreateFailureCode(isFailureCode(value) ? value : DEFAULT_FAILURE_CODE);
+                }}
+              >
+                {FAILURE_CODES.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                    {code === DEFAULT_FAILURE_CODE ? ' (default)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <button type="submit" disabled={creating}>
             {creating ? 'Creating…' : 'Create payment'}
           </button>
@@ -317,6 +372,9 @@ export default function ProjectPaymentsPage() {
         {payments.map((payment) => (
           <li key={payment.id}>
             <span className={`payment-status payment-status-${payment.status}`}>{payment.status}</span>{' '}
+            {payment.status === 'failed' && payment.failure_code !== null ? (
+              <span className="payment-failure-code">{payment.failure_code}</span>
+            ) : null}{' '}
             <span className="payment-amount">${payment.amount}</span> — created {payment.created_at}
             <button type="button" onClick={() => void onView(payment.id)}>
               View
