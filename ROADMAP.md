@@ -114,13 +114,13 @@
 
 **Goal:** Enable multi-tenancy with organization management and role-based access control.
 
-- [ ] Organizations CRUD
-- [ ] Member management (invite, remove)
-- [ ] Role definitions (owner, admin, member, viewer)
-- [ ] Permission system
-- [ ] Tenant isolation (data scoping)
-- [ ] Organization management UI in `apps/web`
-- [ ] Member and role management UI
+- [x] Organizations CRUD
+- [x] Member management (invite, remove)
+- [x] Role definitions (owner, admin, member, viewer)
+- [x] Permission system
+- [x] Tenant isolation (data scoping)
+- [x] Organization management UI in `apps/web`
+- [x] Member and role management UI
 
 ---
 
@@ -128,14 +128,14 @@
 
 **Goal:** Allow organizations to create projects and manage API keys per environment.
 
-- [ ] Projects CRUD
-- [ ] TEST vs LIVE environment separation
-- [ ] API key generation
-- [ ] Key rotation
-- [ ] Key revocation
-- [ ] Project management UI
-- [ ] API key management UI
-- [ ] Environment selection UI
+- [x] Projects CRUD
+- [x] TEST vs LIVE environment separation
+- [x] API key generation
+- [x] Key rotation
+- [x] Key revocation
+- [x] Project management UI
+- [x] API key management UI
+- [x] Environment selection UI
 
 ---
 
@@ -143,10 +143,10 @@
 
 **Goal:** CRUD operations for customer records with pagination and filtering.
 
-- [ ] Customer CRUD
-- [ ] Pagination (cursor-based)
-- [ ] Filtering and search
-- [ ] Customers UI in the dashboard
+- [x] Customer CRUD
+- [x] Pagination (cursor-based)
+- [x] Filtering and search
+- [x] Customers UI in the dashboard
 
 ---
 
@@ -154,11 +154,11 @@
 
 **Goal:** Core payment model with state machine and simulation capabilities.
 
-- [ ] Payment data model
-- [ ] Payment API (create, retrieve, list)
-- [ ] Payment state machine (pending, processing, succeeded, failed)
-- [ ] Payment simulation (no real money)
-- [ ] Payments UI in the dashboard
+- [x] Payment data model
+- [x] Payment API (create, retrieve, list)
+- [x] Payment state machine (pending, processing, succeeded, failed)
+- [x] Payment simulation (no real money)
+- [x] Payments UI in the dashboard
 
 ---
 
@@ -166,11 +166,11 @@
 
 **Goal:** Ensure safe retries and prevent duplicate operations.
 
-- [ ] Idempotency key support
-- [ ] Database constraints for uniqueness
-- [ ] Transaction-safe operations
-- [ ] Concurrency tests
-- [ ] Idempotency behavior reflected in API documentation
+- [x] Idempotency key support
+- [x] Database constraints for uniqueness
+- [x] Transaction-safe operations
+- [x] Concurrency tests
+- [x] Idempotency behavior reflected in API documentation
 
 ---
 
@@ -178,11 +178,11 @@
 
 **Goal:** Support full and partial refunds with proper validation.
 
-- [ ] Full refund flow
-- [ ] Partial refund flow
-- [ ] Refund validation rules
-- [ ] Refund API endpoints
-- [ ] Refunds UI in the dashboard
+- [x] Full refund flow
+- [x] Partial refund flow
+- [x] Refund validation rules
+- [x] Refund API endpoints
+- [x] Refunds UI in the dashboard
 
 ---
 
@@ -190,14 +190,14 @@
 
 **Goal:** Reliable event delivery with HMAC signing, retries, and replay.
 
-- [ ] Event system
-- [ ] Webhook registration
-- [ ] HMAC-SHA256 signature verification
-- [ ] Redis/BullMQ queue for delivery
-- [ ] Retry policy (exponential backoff)
-- [ ] Webhook replay
-- [ ] Webhook management UI
-- [ ] Webhook event and delivery visibility in the dashboard
+- [x] Event system
+- [x] Webhook registration
+- [x] HMAC-SHA256 signature verification
+- [x] Redis/BullMQ queue for delivery
+- [x] Retry policy (exponential backoff)
+- [x] Webhook replay
+- [x] Webhook management UI
+- [x] Webhook event and delivery visibility in the dashboard
 
 ---
 
@@ -205,10 +205,10 @@
 
 **Goal:** Traceable, structured logs for every API request.
 
-- [ ] Request ID propagation
-- [ ] Structured JSON logging
-- [ ] API request/response logs
-- [ ] Request log viewer in the dashboard
+- [x] Request ID propagation
+- [x] Structured JSON logging
+- [x] API request/response logs
+- [x] Request log viewer in the dashboard
 
 ---
 
@@ -216,10 +216,10 @@
 
 **Goal:** Immutable audit trail for security and business events.
 
-- [ ] Security event logging (auth, access)
-- [ ] Business event logging (payments, refunds)
-- [ ] Audit log API
-- [ ] Audit log viewer in the dashboard
+- [x] Security event logging (auth, access)
+- [x] Business event logging (payments, refunds)
+- [x] Audit log API
+- [x] Audit log viewer in the dashboard
 
 ---
 
@@ -239,25 +239,25 @@
 
 **Goal:** Deliver the complete BrinnPay web experience, combining the public website, developer-facing information, authentication flows, and authenticated dashboard in a single Next.js application.
 
-- [ ] Public home page
-- [ ] Product overview pages
-- [ ] Public navigation and footer
-- [ ] Login flow
-- [ ] Registration flow
-- [ ] Authenticated dashboard shell
-- [ ] Dashboard overview
-- [ ] Payments view
-- [ ] Customers view
-- [ ] Refunds view
-- [ ] Webhooks management
-- [ ] API keys management
-- [ ] Projects management
-- [ ] Organizations and settings
-- [ ] Request logs viewer
-- [ ] Audit logs viewer
-- [ ] Responsive layout
-- [ ] Authentication-aware route protection
-- [ ] Consistent application layout and navigation
+- [x] Public home page
+- [x] Product overview pages
+- [x] Public navigation and footer
+- [x] Login flow
+- [x] Registration flow
+- [x] Authenticated dashboard shell
+- [x] Dashboard overview
+- [x] Payments view
+- [x] Customers view
+- [x] Refunds view
+- [x] Webhooks management
+- [x] API keys management
+- [x] Projects management
+- [x] Organizations and settings
+- [x] Request logs viewer
+- [x] Audit logs viewer
+- [x] Responsive layout
+- [x] Authentication-aware route protection
+- [x] Consistent application layout and navigation
 
 > Note: Public documentation is implemented as part of the `apps/web` application and is covered in detail in Phase 15.
 
@@ -267,23 +267,23 @@
 
 **Goal:** Make BrinnPay understandable and easy to integrate for developers.
 
-- [ ] Public documentation section in `apps/web`
-- [ ] OpenAPI documentation
-- [ ] API reference docs
-- [ ] Authentication guide
-- [ ] API key usage guide
-- [ ] TEST/LIVE environment guide
-- [ ] Payments guide
-- [ ] Refunds guide
-- [ ] Idempotency guide
-- [ ] Webhooks guide
-- [ ] Error handling guide
-- [ ] cURL examples
-- [ ] Code examples
-- [ ] Integration guides
-- [ ] Sandbox usage guide
-- [ ] Local development guide
-- [ ] Developer onboarding flow
+- [x] Public documentation section in `apps/web`
+- [x] OpenAPI documentation
+- [x] API reference docs
+- [x] Authentication guide
+- [x] API key usage guide
+- [x] TEST/LIVE environment guide
+- [x] Payments guide
+- [x] Refunds guide
+- [x] Idempotency guide
+- [x] Webhooks guide
+- [x] Error handling guide
+- [x] cURL examples
+- [x] Code examples
+- [x] Integration guides
+- [x] Sandbox usage guide
+- [x] Local development guide
+- [x] Developer onboarding flow
 
 ---
 
@@ -291,10 +291,10 @@
 
 **Goal:** Realistic simulation of payment scenarios without real money.
 
-- [ ] Success simulation
-- [ ] Decline simulation
-- [ ] Timeout simulation
-- [ ] Webhook failure simulation
+- [x] Success simulation
+- [x] Decline simulation
+- [x] Timeout simulation
+- [x] Webhook failure simulation
 
 ---
 
@@ -302,14 +302,14 @@
 
 **Goal:** Comprehensive test coverage across all layers.
 
-- [ ] Unit tests
-- [ ] Integration tests
-- [ ] End-to-end tests
-- [ ] Critical flow coverage
-- [ ] Web application critical flow coverage
-- [ ] Authentication flow coverage
-- [ ] Payment and refund flow coverage
-- [ ] Webhook flow coverage
+- [x] Unit tests
+- [x] Integration tests
+- [x] End-to-end tests
+- [x] Critical flow coverage
+- [x] Web application critical flow coverage
+- [x] Authentication flow coverage
+- [x] Payment and refund flow coverage
+- [x] Webhook flow coverage
 
 ---
 
