@@ -8,6 +8,7 @@ import { configureApp } from '../src/bootstrap';
 import { setupSwagger } from '../src/openapi/swagger';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
+import { loadContractDocument } from './support/conformance';
 
 /**
  * Phase 2 e2e (D2): supertest against the running Nest application with real
@@ -105,6 +106,48 @@ describe('BrinnPay API (e2e)', () => {
 
   it('serves Swagger UI at the canonical contract path outside /api/v1', async () => {
     await request(app.getHttpServer()).get('/api/v1/docs').expect(404);
+  });
+
+  it('serves the canonical contract document itself at /docs-json (F7, contract loads)', async () => {
+    // `/docs-json` is what Swagger UI's "try it" fetches; serving the file
+    // byte-for-byte is the app-level proof that the UI renders the canonical
+    // contract and that no decorator-generated parallel contract exists.
+    const response = await request(app.getHttpServer()).get('/docs-json').expect(200);
+    expect(response.body).toEqual(loadContractDocument());
+  });
+
+  it('answers a CORS preflight with no auth, echoing the requested headers for an allowed origin (F7)', async () => {
+    const preflight = await request(app.getHttpServer())
+      .options('/api/v1/projects')
+      .set('Origin', 'http://localhost:3001')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'authorization,content-type,idempotency-key')
+      .expect(204);
+
+    expect(preflight.headers['access-control-allow-origin']).toBe('http://localhost:3001');
+    expect(preflight.headers['access-control-allow-credentials']).toBe('true');
+    expect(String(preflight.headers['access-control-allow-methods'])).toContain('POST');
+    expect(preflight.headers['access-control-allow-headers']).toBe(
+      'authorization,content-type,idempotency-key',
+    );
+    // No authentication of any kind: a preflight carries no credentials by
+    // definition and is excluded before auth and rate limiting (§10.3, AC12).
+    expect(preflight.headers['www-authenticate']).toBeUndefined();
+    expect(preflight.text).toBeFalsy();
+  });
+
+  it('carries no CORS allow headers when the preflight origin is not configured (F7)', async () => {
+    const preflight = await request(app.getHttpServer())
+      .options('/api/v1/projects')
+      .set('Origin', 'https://evil.example')
+      .set('Access-Control-Request-Method', 'POST');
+
+    // Whatever status the CORS layer answers with, the browser-usable signal
+    // is the absence of `access-control-allow-origin` for a denied origin —
+    // without it the browser refuses the cross-origin call no matter what
+    // else the response carries.
+    expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
+    expect(preflight.headers['access-control-allow-headers']).toBeUndefined();
   });
 });
 

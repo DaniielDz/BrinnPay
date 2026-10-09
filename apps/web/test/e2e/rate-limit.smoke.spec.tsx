@@ -58,6 +58,8 @@ function stubProjectList(list: () => FakeResponse) {
         .replace(/^https?:\/\/[^/]+/, '')
         .replace(/^\/api\/v1/, '');
       if (path.endsWith('/auth/refresh')) return respond(200, session);
+      // Session restore pairs the refresh with `GET /auth/me` (phase 3 §4.4).
+      if (path.endsWith('/auth/me')) return respond(200, session.user);
       if (/\/projects(?:\?|$)/.test(path)) return list();
       return fallback(input, init);
     }),

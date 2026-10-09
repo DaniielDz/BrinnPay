@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AuthProvider, useAuth, type AuthState } from '../../components/auth/auth-provider';
@@ -55,7 +55,7 @@ describe('AuthProvider (phase 3 §4.4)', () => {
   });
 
   it('restores an existing session on mount via /auth/refresh', async () => {
-    stubAuthApi({ refresh: 'ok' });
+    const { fetchMock } = stubAuthApi({ refresh: 'ok' });
     render(
       <AuthProvider>
         <Probe />
@@ -65,6 +65,12 @@ describe('AuthProvider (phase 3 §4.4)', () => {
     expect(screen.getByTestId('status')).toHaveTextContent('loading');
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'));
     expect(screen.getByTestId('email')).toHaveTextContent('dev@example.com');
+    // The refresh response carries no identity (phase 3 §4.4), so the restored
+    // user can only have come from `GET /auth/me` — the pairing is the defect
+    // guard for the phase 17 D6 session-restore fix.
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/auth/me')),
+    ).toBe(true);
   });
 
   it('reports no session when the refresh cookie is absent or rejected', async () => {
@@ -76,6 +82,30 @@ describe('AuthProvider (phase 3 §4.4)', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('unauthenticated'));
+    expect(screen.queryByTestId('email')).not.toBeInTheDocument();
+  });
+
+  it('keeps a throttled mount restore pending instead of signing the user out (§7.3)', async () => {
+    const { fetchMock } = stubAuthApi({ refresh: 'throttled' });
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+
+    // Drain the restore's promise chain with a macrotask flush (no timed
+    // wait): by then the `429` has been received, parsed and processed.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/auth/refresh')),
+    ).toBe(true);
+    // A `429` is throttling, never a session verdict (phase 14 §7.3): the
+    // restore stays pending rather than flipping to `unauthenticated`, so
+    // throttling can never read as a sign-out.
+    expect(screen.getByTestId('status')).toHaveTextContent('loading');
     expect(screen.queryByTestId('email')).not.toBeInTheDocument();
   });
 

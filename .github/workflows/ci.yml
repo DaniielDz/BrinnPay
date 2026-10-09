@@ -115,6 +115,14 @@ jobs:
       - name: Unit tests
         run: pnpm -r run test
 
+      # Phase 17 D2(a)/AC10: coverage ratchet. The thresholds live next to the
+      # measured baseline in `apps/api/jest.config.js` and
+      # `apps/web/vitest.config.ts` (ADR-0034); a regression below either one
+      # fails this step. Explicit and separate from the unit-test step so a
+      # coverage-gate failure is legible on its own.
+      - name: Coverage thresholds (phase 17 ratchet)
+        run: pnpm test:coverage
+
       - name: Apply Prisma migrations
         run: pnpm --filter @brinnpay/api prisma:migrate:deploy
         env:
@@ -128,3 +136,22 @@ jobs:
 
       - name: Build
         run: pnpm -r run build
+
+      # Phase 17 D1(a)/D7(a): the bounded browser critical-flow set (§12.5) on
+      # every pull request, over the built apps and the service containers this
+      # job already provides. The browser download is cached on the lockfile
+      # hash; an install failure fails the job (rule 5 — never a silent no-op).
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright chromium
+        run: pnpm --filter @brinnpay/web exec playwright install --with-deps chromium
+
+      - name: Browser end-to-end tests (phase 17 §12.5)
+        run: pnpm test:browser
+        env:
+          DATABASE_URL: postgresql://brinnpay:brinnpay@localhost:5432/brinnpay?schema=public
+          REDIS_URL: redis://localhost:6379

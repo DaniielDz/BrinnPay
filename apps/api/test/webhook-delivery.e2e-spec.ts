@@ -431,4 +431,82 @@ describe('webhook delivery (Phase 10, real PostgreSQL + Redis + worker)', () => 
     expect(received.some((item) => item.url === '/deleted')).toBe(false);
     expect(payment.body.id).toBeTruthy();
   });
+
+  it('C6 composed: register → payment → verified delivery → replay → second verified delivery', async () => {
+    requireDependencies(available);
+    const { token, projectId, customerId, endpointsUrl } = await setup('c6');
+
+    // Registration: the signing secret is shown exactly once, at creation.
+    const endpoint = await call(token)
+      .post(endpointsUrl)
+      .send({
+        environment: 'test',
+        url: `${baseUrl}/c6`,
+        event_types: ['payment.created'],
+      })
+      .expect(201);
+    const secret = endpoint.body.signing_secret as string;
+    expect(secret).toBeTruthy();
+    expect(
+      (
+        (await call(token).get(`${endpointsUrl}?environment=test`).expect(200)).body.data as Array<
+          Record<string, unknown>
+        >
+      ).some((entry) => entry.id === endpoint.body.id && !('signing_secret' in entry)),
+    ).toBe(true);
+
+    // Payment → event row persisted with the payment, fan-out queued.
+    await createPayment(token, projectId, customerId);
+    const first = await waitFor(async () => {
+      const row = await prisma.webhookDelivery.findFirst({
+        where: { endpointId: endpoint.body.id as string },
+      });
+      return row && row.status === 'delivered' ? row : null;
+    }, 'the worker to deliver the original event');
+
+    const event = await prisma.webhookEvent.findFirstOrThrow({
+      where: { projectId, type: 'payment.created' },
+    });
+
+    // Replay is accepted (202) and the worker delivers it as a second attempt.
+    await call(token)
+      .post(
+        `/api/v1/projects/${projectId}/webhook-endpoints/${endpoint.body.id}/events/${event.id}/replay`,
+      )
+      .expect(202);
+    const rows = await waitFor(async () => {
+      const found = await prisma.webhookDelivery.findMany({
+        where: { endpointId: endpoint.body.id as string },
+        orderBy: { createdAt: 'asc' },
+      });
+      const replayed = found.find((row) => row.isReplay);
+      return found.length === 2 && replayed && replayed.status === 'delivered' ? found : null;
+    }, 'the worker to deliver the replayed delivery');
+    expect(rows.filter((row) => row.status === 'delivered')).toHaveLength(2);
+
+    // A replay never mints a second event row (webhooks.e2e asserts the row
+    // count too; asserted here because the composed flow is where drift in the
+    // lifecycle would surface).
+    expect(
+      await prisma.webhookEvent.count({ where: { projectId, type: 'payment.created' } }),
+    ).toBe(1);
+    expect(first.status).toBe('delivered');
+
+    // The receiver saw exactly two attempts, both signatures verifiable with
+    // the endpoint secret (constant-time), same event id, distinct delivery ids.
+    const attempts = received.filter((item) => item.url === '/c6');
+    expect(attempts).toHaveLength(2);
+    for (const attempt of attempts) {
+      const signature = String(attempt.headers['brinnpay-signature']);
+      expect(signature).toMatch(/^t=\d{10},v1=[0-9a-f]{64}$/);
+      const timestamp = signature.slice(2, signature.indexOf(','));
+      const provided = signature.split(',v1=')[1];
+      const expected = createHmac('sha256', secret)
+        .update(`${timestamp}.${attempt.rawBody}`, 'utf8')
+        .digest();
+      expect(timingSafeEqual(Buffer.from(provided, 'hex'), expected)).toBe(true);
+      expect(attempt.headers['brinnpay-event-id']).toBe(event.id);
+    }
+    expect(new Set(attempts.map((item) => item.headers['brinnpay-delivery-id'])).size).toBe(2);
+  });
 });

@@ -390,7 +390,6 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
     expect(customerUpdated.data).toEqual({ request_id: requestIdOf(update) });
 
     // --- payment create + idempotent replay → exactly one entry (AC5) ---
-    const paymentStartedAt = Date.now();
     const payment = await auth(owner.token)
       .post(paymentsUrl)
       .set('Idempotency-Key', `idem-audit-${RUN}`)
@@ -432,8 +431,14 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
     expect(await entries(organizationId, 'payment.created')).toHaveLength(1);
 
     // --- read-time catch-up → payment.succeeded attributed to the creator ---
-    const remaining = paymentStartedAt + 3_100 - Date.now();
-    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+    // Backdating `created_at` makes the whole simulated schedule already
+    // elapsed, which is the deterministic equivalent of waiting for it: the
+    // schedule is a pure function of (scenario, created_at, delays). Phase 17
+    // rule 4 forbids the fixed sleep this test used to perform here.
+    await prisma.payment.update({
+      where: { id: payment.body.id as string },
+      data: { createdAt: new Date(Date.now() - 60_000) },
+    });
     const advanced = await auth(owner.token).get(`${paymentsUrl}/${payment.body.id}`);
     expect(advanced.status).toBe(200);
     expect(advanced.body.status).toBe('succeeded');
@@ -480,6 +485,41 @@ describe('audit logging (Phase 12, real PostgreSQL)', () => {
     expect(trail).not.toContain(key.body.key);
     expect(trail).not.toContain(`idem-audit-${RUN}`);
   });
+
+  it('serializes concurrent same-key creates into one payment and one audit row (AC5/C5)', async () => {
+    requireDependencies(reachable);
+    const { owner, organizationId, projectId, customersUrl, paymentsUrl } =
+      await setup('audit-race');
+
+    const customer = await auth(owner.token)
+      .post(customersUrl)
+      .send({ environment: 'test', email: EMAIL('audit-race') });
+    expect(customer.status).toBe(201);
+
+    // The idempotency suites prove one payment and one event for concurrent
+    // same-key retries; the audit dimension is asserted here because an audit
+    // write riding a losing retry would duplicate `payment.created`.
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        auth(owner.token)
+          .post(paymentsUrl)
+          .set('Idempotency-Key', `audit-race-${RUN}`)
+          .send({
+            environment: 'test',
+            customer_id: customer.body.id,
+            amount: '10.00',
+            currency: 'usd',
+          }),
+      ),
+    );
+    for (const response of responses) {
+      expect(response.status).toBe(201);
+      expect(response.body).toEqual(responses[0]!.body);
+    }
+
+    expect(await prisma.payment.count({ where: { projectId } })).toBe(1);
+    expect(await entries(organizationId, 'payment.created')).toHaveLength(1);
+  }, 20_000);
 
   // -------------------------------------------------------------------------
   // Atomicity of the write path (§6.2, AC4)
