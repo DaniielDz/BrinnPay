@@ -51,6 +51,26 @@ describe('BrinnPay customers (e2e, phase 6)', () => {
     }
 
     if (reachable.value) {
+      // Dependency-ordered reset. `Payment.customer` is `Restrict` (schema),
+      // so payments must go before customers — a payment left behind by an
+      // interrupted run used to make this hook fail on a foreign key, which
+      // is an order-dependent suite (phase 17 rule 4/AC11: every suite must
+      // pass against a database that already contains other suites' rows).
+      //
+      // Scoped to what this suite owns (security review F5): its customers
+      // are created through `EMAIL(...)` with the `e2e-cust-` prefix, so only
+      // payments belonging to those customers are removed — the payments
+      // table is never wiped wholesale, which would destroy rows that other
+      // suites still own.
+      const ownedCustomers = await prisma.customer.findMany({
+        where: { email: { startsWith: 'e2e-cust-' } },
+        select: { id: true },
+      });
+      if (ownedCustomers.length > 0) {
+        await prisma.payment.deleteMany({
+          where: { customerId: { in: ownedCustomers.map((customer) => customer.id) } },
+        });
+      }
       await prisma.customer.deleteMany();
       await prisma.apiKey.deleteMany();
       await prisma.project.deleteMany();

@@ -16,7 +16,8 @@ export const sessionFixture: AuthSession = {
 };
 
 interface ApiBehaviour {
-  refresh?: 'ok' | 'fail';
+  /** `throttled` answers the refresh with a real `429` (phase 14 §7.3). */
+  refresh?: 'ok' | 'fail' | 'throttled';
   login?: 'ok' | 'fail';
   register?: 'ok' | 'fail';
   logout?: 'ok' | 'fail';
@@ -59,9 +60,22 @@ export function stubAuthApi(behaviour: ApiBehaviour = {}) {
     ) => respond(status, { error: { code, message } }, headers);
 
     if (url.endsWith('/auth/refresh')) {
+      // Phase 3 §4.4: the refresh response is an `AccessTokenResponse` —
+      // `access_token`, `token_type`, `expires_in` — and deliberately never
+      // carries the user or the refresh token. Answering it with the full
+      // session would let a provider that trusts the refresh body for identity
+      // pass against this stub while failing against the real API (phase 17
+      // D6: the strict assertion is the defect guard).
+      if (behaviour.refresh === 'throttled') {
+        return fail('RATE_LIMITED', 'Too many requests', 429, { 'Retry-After': '42' });
+      }
       return behaviour.refresh === 'fail'
         ? fail('UNAUTHENTICATED', 'Session invalid or expired', 401)
-        : respond(200, sessionFixture);
+        : respond(200, {
+            access_token: sessionFixture.access_token,
+            token_type: sessionFixture.token_type,
+            expires_in: sessionFixture.expires_in,
+          });
     }
     if (url.endsWith('/auth/login')) {
       if (behaviour.login === 'fail') return fail('UNAUTHENTICATED', 'Invalid email or password', 401);

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import ProjectsPage from '../../app/(dashboard)/dashboard/projects/page';
@@ -217,6 +217,13 @@ describe('error presentation (phase 14 §7.3, D6)', () => {
  */
 describe('throttled responses rendered by a view (phase 14 §7.3/§7.4)', () => {
   it('renders the retryable 429 in an alert with the delay and no authorization wording', async () => {
+    const ownerUser = {
+      id: 'user-owner',
+      email: 'owner@example.com',
+      name: 'Ada Lovelace',
+      created_at: '2026-09-19T00:00:00.000Z',
+      updated_at: '2026-09-19T00:00:00.000Z',
+    };
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -226,14 +233,13 @@ describe('throttled responses rendered by a view (phase 14 §7.3/§7.4)', () => 
             access_token: 'test-access-token',
             token_type: 'Bearer',
             expires_in: 900,
-            user: {
-              id: 'user-owner',
-              email: 'owner@example.com',
-              name: 'Ada Lovelace',
-              created_at: '2026-09-19T00:00:00.000Z',
-              updated_at: '2026-09-19T00:00:00.000Z',
-            },
+            user: ownerUser,
           });
+        }
+        // Session restore pairs the refresh with `GET /auth/me` (phase 3 §4.4);
+        // only the throttled *data* route below is meant to answer 429.
+        if (url.endsWith('/auth/me')) {
+          return respond(200, ownerUser);
         }
         expect(init?.method ?? 'GET').toBe('GET');
         return respond(429, envelope('RATE_LIMITED', 'Too many requests'), {
@@ -261,9 +267,11 @@ describe('throttled responses rendered by a view (phase 14 §7.3/§7.4)', () => 
 });
 
 /**
- * Session resilience (security review L-6, phase 14 §7.3): only an actual
- * rejection of the refresh clears the session. A transport failure is not
- * evidence that the session is gone, so it must never sign the user out.
+ * Session resilience (security review L-6/F1, phase 14 §7.3): only an actual
+ * rejection of the refresh (`401`) clears the session. A transport failure is
+ * not evidence that the session is gone, and a `429` is throttling — retryable
+ * and transient, never an authorization or session problem — so neither may
+ * ever sign the user out.
  */
 describe('session recovery resilience (phase 14 §7.3)', () => {
   it('keeps the session when the recovery refresh fails on the network', async () => {
@@ -277,6 +285,8 @@ describe('session recovery resilience (phase 14 §7.3)', () => {
           if (refreshCalls === 1) return respond(200, sessionFixture);
           throw new TypeError('Failed to fetch'); // network blip mid-session
         }
+        // The mount-time restore resolves the identity after the refresh.
+        if (url.endsWith('/auth/me')) return respond(200, sessionFixture.user);
         return respond(401, envelope('UNAUTHENTICATED', 'Missing or invalid token'));
       }),
     );
@@ -301,5 +311,106 @@ describe('session recovery resilience (phase 14 §7.3)', () => {
     await waitFor(() => expect(refreshCalls).toBe(2));
     // The session survives a blip: retryable, not a sign-out.
     expect(status).toBe('authenticated');
+  });
+
+  it('keeps the session when the recovery refresh is throttled (429)', async () => {
+    let refreshCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/auth/refresh')) {
+          refreshCalls += 1;
+          // The mount restore succeeds; the mid-session recovery is throttled.
+          if (refreshCalls === 1) {
+            return respond(200, {
+              access_token: sessionFixture.access_token,
+              token_type: sessionFixture.token_type,
+              expires_in: sessionFixture.expires_in,
+            });
+          }
+          return respond(429, envelope('RATE_LIMITED', 'Too many requests'), {
+            'Retry-After': '42',
+            'RateLimit-Limit': '60',
+            'RateLimit-Remaining': '0',
+            'RateLimit-Reset': '42',
+          });
+        }
+        // The mount-time restore resolves the identity after the refresh.
+        if (url.endsWith('/auth/me')) return respond(200, sessionFixture.user);
+        return respond(401, envelope('UNAUTHENTICATED', 'Missing or invalid token'));
+      }),
+    );
+
+    let status: string | undefined;
+    function Probe() {
+      status = useAuth().status;
+      return null;
+    }
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(status).toBe('authenticated'));
+
+    // A mid-session 401 triggers recovery; the refresh answers 429.
+    const err = await expectApiError(listOrganizations('stale-access-token'));
+    expect(err.status).toBe(401);
+
+    await waitFor(() => expect(refreshCalls).toBe(2));
+    // Throttling is not a session verdict (§7.3): recovery returned without
+    // clearing, so the user is still signed in.
+    expect(status).toBe('authenticated');
+  });
+
+  it('clears the session when the recovery refresh is rejected (401)', async () => {
+    let refreshCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/auth/refresh')) {
+          refreshCalls += 1;
+          if (refreshCalls === 1) {
+            return respond(200, {
+              access_token: sessionFixture.access_token,
+              token_type: sessionFixture.token_type,
+              expires_in: sessionFixture.expires_in,
+            });
+          }
+          return respond(401, envelope('UNAUTHENTICATED', 'Session invalid or expired'));
+        }
+        if (url.endsWith('/auth/me')) return respond(200, sessionFixture.user);
+        return respond(401, envelope('UNAUTHENTICATED', 'Missing or invalid token'));
+      }),
+    );
+
+    let status: string | undefined;
+    function Probe() {
+      status = useAuth().status;
+      return null;
+    }
+
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(status).toBe('authenticated'));
+
+    // A mid-session 401 triggers recovery; the rejected refresh clears the
+    // session from inside the handler, so the call is awaited within `act`.
+    let err: ApiClientError | undefined;
+    await act(async () => {
+      err = await expectApiError(listOrganizations('stale-access-token'));
+    });
+    expect(err?.status).toBe(401);
+
+    // An actual rejection of the refresh: the session is gone, so it is
+    // cleared and `AuthGuard` can redirect to `/login`.
+    await waitFor(() => expect(status).toBe('unauthenticated'));
+    expect(refreshCalls).toBe(2);
   });
 });

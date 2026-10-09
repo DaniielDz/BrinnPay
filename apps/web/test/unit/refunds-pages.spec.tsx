@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import ProjectRefundsPage from '../../app/(dashboard)/dashboard/projects/[projectId]/refunds/page';
 import { AuthProvider } from '../../components/auth/auth-provider';
-import type { Refund } from '../../lib/brinnpay/client';
-import { paymentFixtures, stubPaymentsApi, unstubPaymentsApi } from './payments-test-utils';
-import { projectFixture, sessionFixture } from './projects-test-utils';
+import { projectFixture } from './projects-test-utils';
+import { stubRefunds, unstubRefunds } from './refunds-test-utils';
 
 const { params, search } = vi.hoisted(() => ({ params: vi.fn(), search: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -13,44 +12,7 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 
-function stubRefunds(options: { member?: boolean; environment?: string } = {}) {
-  const api = stubPaymentsApi({
-    session: options.member ? { ...sessionFixture, user: { ...sessionFixture.user, id: 'user-member' } } : undefined,
-    payments: options.environment === 'live'
-      ? [{ ...paymentFixtures[1], id: 'live-pay', environment: 'live' }]
-      : [paymentFixtures[1]],
-  });
-  const fetchPayments = api.fetchMock;
-  const refunds: Refund[] = [];
-  const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(url);
-    const paymentId = path.match(/\/payments\/([^/?]+)\/refunds/)?.[1];
-    if (!paymentId) return fetchPayments(url, init);
-    const respond = (status: number, body: unknown, headers: Record<string, string> = {}) => ({
-      ok: status < 400,
-      status,
-      json: async () => body,
-      headers: new Headers(headers),
-    });
-    if (init?.method === 'POST') {
-      const body = JSON.parse(String(init.body)) as { amount?: string; reason?: string };
-      const created: Refund = {
-        id: `refund-${refunds.length + 1}`, payment_id: paymentId, project_id: projectFixture.id,
-        environment: 'test', amount: body.amount ?? '40.00', currency: 'usd', status: 'succeeded',
-        reason: body.reason ?? null, created_at: '2026-09-26T00:00:00Z', updated_at: '2026-09-26T00:00:00Z',
-      };
-      refunds.push(created);
-      return respond(201, created);
-    }
-    const detail = path.match(/\/refunds\/([^/?]+)/)?.[1];
-    if (detail) return respond(200, refunds.find((item) => item.id === detail));
-    return respond(200, { data: [...refunds], next_cursor: null, has_more: false });
-  });
-  vi.stubGlobal('fetch', fetchMock);
-  return { fetchMock, refunds };
-}
-
-afterEach(() => { unstubPaymentsApi(); params.mockReset(); search.mockReset(); });
+afterEach(() => { unstubRefunds(); params.mockReset(); search.mockReset(); });
 
 describe('refund dashboard (Phase 9)', () => {
   it('shows selected payment refunds and submits partial and full bodies without cross-environment mixing', async () => {

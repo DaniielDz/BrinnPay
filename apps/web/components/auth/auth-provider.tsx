@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { ApiClientError, login as apiLogin, logout as apiLogout, refresh as apiRefresh, register as apiRegister, type AuthSession, type PublicUser } from '../../lib/brinnpay/client';
+import { ApiClientError, login as apiLogin, logout as apiLogout, me as apiMe, refresh as apiRefresh, register as apiRegister, type AuthSession, type PublicUser } from '../../lib/brinnpay/client';
 import { resetRateLimitStore } from '../../lib/brinnpay/rate-limit';
 import { setUnauthorizedRecovery } from '../../lib/brinnpay/session';
 
@@ -34,10 +34,30 @@ export interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 /**
+ * The failure is the API's rejection of the session (`401`): the refresh
+ * cookie is missing, expired, reused or otherwise refused (phase 3 §4.4).
+ * Nothing else proves the session is gone.
+ */
+function isRejected(error: unknown): boolean {
+  return error instanceof ApiClientError && error.status === 401;
+}
+
+/**
+ * The failure is throttling (`429`): transient by definition and never a
+ * verdict on the session — phase 14 §7.3 requires a `429` to read as retryable,
+ * never as an authorization or session problem, so it must not sign anyone out.
+ */
+function isThrottled(error: unknown): boolean {
+  return error instanceof ApiClientError && error.status === 429;
+}
+
+/**
  * Client-side session store (phase 3 §4.4). The API remains the enforcement
  * point; this provider only keeps the in-memory access token and the current
- * user. On mount it restores a session through `/auth/refresh`, which uses the
- * `HttpOnly` cookie automatically.
+ * user. On mount it restores a session through `/auth/refresh` (the `HttpOnly`
+ * cookie round-trips automatically) and then resolves the identity through
+ * `GET /auth/me` — the refresh response is an `AccessTokenResponse` and never
+ * carries the user (phase 3 §4.4; phase 14 §4/§5).
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading');
@@ -60,42 +80,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resetRateLimitStore();
   }, []);
 
+  /**
+   * Cookie refresh + identity lookup as one unit: a restored session is only
+   * usable together with the user it belongs to. Used by both the mount-time
+   * restore and the mid-session 401 recovery, so neither path can leave
+   * `user` unset (which would silently demote every role-gated control to
+   * the viewer fallback).
+   */
+  const restoreSession = useCallback(async (): Promise<AuthSession> => {
+    const payload = await apiRefresh();
+    return { ...payload, user: await apiMe(payload.access_token) };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    apiRefresh()
+    restoreSession()
       .then((session) => {
         if (!cancelled) applySession(session);
       })
-      .catch(() => {
-        if (!cancelled) clearSession();
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        // A throttled restore (`429`) is not evidence that the session is
+        // gone (phase 14 §7.3): the restore stays pending instead of being
+        // cleared, so throttling can never read as a sign-out.
+        if (isThrottled(error)) return;
+        clearSession();
       });
     return () => {
       cancelled = true;
     };
-  }, [applySession, clearSession]);
+  }, [restoreSession, applySession, clearSession]);
 
   // Recovery path for a mid-session `401` (phase 14 §7.3): the API client
   // hands a failed authenticated request back here once — refresh through the
   // existing session flow, or clear the session so `AuthGuard` redirects to
   // `/login`. Never shown to the user as a generic failure. Concurrent callers
   // share one refresh (see `lib/brinnpay/session.ts`), and only an actual
-  // rejection of the refresh clears the session: a transport failure or a 5xx
-  // is not evidence that the session is gone, so it never signs the user out.
+  // rejection of the refresh (`401`) clears the session: a `429` (retryable,
+  // never a session problem), another `4xx`, a `5xx` or a transport failure is
+  // not evidence that the session is gone, so none of them signs the user out.
   useEffect(() => {
     setUnauthorizedRecovery(async () => {
       try {
-        const session = await apiRefresh();
+        const session = await restoreSession();
         applySession(session);
         return session.access_token;
       } catch (error) {
-        const rejected =
-          error instanceof ApiClientError && error.status >= 400 && error.status < 500;
-        if (rejected) clearSession();
+        if (isRejected(error)) clearSession();
         return null;
       }
     });
     return () => setUnauthorizedRecovery(null);
-  }, [applySession, clearSession]);
+  }, [restoreSession, applySession, clearSession]);
 
   const login = useCallback(
     async (email: string, password: string) => {

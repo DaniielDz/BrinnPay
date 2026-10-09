@@ -293,8 +293,15 @@ export function login(email: string, password: string): Promise<AuthSession> {
   });
 }
 
-export async function refresh(): Promise<AuthSession> {
-  return apiFetch<AuthSession>('/auth/refresh', { method: 'POST' });
+/**
+ * Exchanges the refresh `HttpOnly` cookie for a new access token. Per phase 3
+ * §4.4 this response is an `AccessTokenResponse` (`access_token`,
+ * `token_type`, `expires_in`) — deliberately **not** an `AuthSession`: the
+ * refresh token never appears in the body and no identity is attached.
+ * Callers that need the full session pair it with {@link me}.
+ */
+export async function refresh(): Promise<AccessTokenPayload> {
+  return apiFetch<AccessTokenPayload>('/auth/refresh', { method: 'POST' });
 }
 
 export async function logout(): Promise<void> {
