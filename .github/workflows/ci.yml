@@ -40,6 +40,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Phase 18 D4(a) (ADR-0036): dependency-vulnerability gating. Fails on
+      # high/critical advisories among production dependencies; runnable
+      # locally with `pnpm audit:deps` from the repository root. Reads the
+      # lockfile/registry only — no package scripts execute.
+      - name: Dependency audit (phase 18 D4)
+        run: pnpm audit:deps
+
       - name: Validate workspace
         run: pnpm -r list
 

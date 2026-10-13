@@ -6,6 +6,7 @@
   "scripts": {
     "lint": "pnpm -r lint && pnpm lint:openapi",
     "lint:openapi": "redocly lint docs/openapi.yaml",
+    "audit:deps": "pnpm audit --prod --audit-level=high",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:e2e": "pnpm -r test:e2e",
@@ -26,6 +27,6 @@
   "packageManager": "pnpm@12.4.1",
   "type": "module",
   "devDependencies": {
-    "@redocly/cli": "^2.53.2"
+    "@redocly/cli": "^2.62.1"
   }
 }

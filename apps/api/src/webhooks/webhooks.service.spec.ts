@@ -19,6 +19,7 @@ const SESSION: ProjectScope = {
   mode: 'session',
   project: { project_id: PROJECT, environment: 'test', role: 'owner' } as never,
   project_id: PROJECT,
+  user_id: '0198f0c2-0000-7000-8000-000000000033',
 };
 
 const API_KEY: ProjectScope = {

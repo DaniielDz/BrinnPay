@@ -1,6 +1,6 @@
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import type { CustomersScope } from './customers-scope';
+import type { ProjectScope } from '../common/project-scope/project-scope';
 import { CustomersService } from './customers.service';
 
 function knownError(code: string): Prisma.PrismaClientKnownRequestError {
@@ -14,7 +14,7 @@ const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
 const CUSTOMER_ID = '0192f2a0-0000-7000-8000-00000000000c';
 const USER_ID = '0192f2a0-0000-7000-8000-00000000000d';
 
-function sessionScope(projectId: string = PROJECT_ID): CustomersScope {
+function sessionScope(projectId: string = PROJECT_ID): ProjectScope {
   return {
     mode: 'session',
     project: { project_id: projectId, organization_id: 'org-1' },
@@ -23,7 +23,7 @@ function sessionScope(projectId: string = PROJECT_ID): CustomersScope {
   };
 }
 
-function apiKeyScope(environment: 'test' | 'live' = 'test', projectId: string = PROJECT_ID): CustomersScope {
+function apiKeyScope(environment: 'test' | 'live' = 'test', projectId: string = PROJECT_ID): ProjectScope {
   return {
     mode: 'api_key',
     key: { key_id: 'key-1', project_id: projectId, organization_id: 'org-1', environment },

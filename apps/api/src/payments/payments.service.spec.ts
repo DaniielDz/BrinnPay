@@ -8,7 +8,7 @@ import {
 import type { PaymentEvent } from './payment-events';
 import { DEFAULT_SIMULATION_DELAYS, type SimulationDelays } from './payment-simulation';
 import type { PaymentRow } from './payment-types';
-import type { PaymentsScope } from './payments-scope';
+import type { ProjectScope } from '../common/project-scope/project-scope';
 import { PaymentsService } from './payments.service';
 
 const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
@@ -23,7 +23,7 @@ function past(): Date {
   return new Date(Date.now() - 60_000);
 }
 
-function sessionScope(projectId: string = PROJECT_ID): PaymentsScope {
+function sessionScope(projectId: string = PROJECT_ID): ProjectScope {
   return {
     mode: 'session',
     project: { project_id: projectId, organization_id: 'org-1' },
@@ -32,7 +32,7 @@ function sessionScope(projectId: string = PROJECT_ID): PaymentsScope {
   };
 }
 
-function apiKeyScope(environment: 'test' | 'live' = 'test', projectId: string = PROJECT_ID): PaymentsScope {
+function apiKeyScope(environment: 'test' | 'live' = 'test', projectId: string = PROJECT_ID): ProjectScope {
   return {
     mode: 'api_key',
     key: { key_id: 'key-1', project_id: projectId, organization_id: 'org-1', environment },

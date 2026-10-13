@@ -67,4 +67,4 @@
 | Input validation (pipes/DTOs) | Phase 2 foundation + every phase |
 | Structured secure logging / request IDs | Phase 2 base, Phases 11–12 |
 | Security headers on web responses | Phase 14 |
-| Security hardening review (OWASP, IDOR tests) | Phase 18 |
+| Security hardening review (OWASP, IDOR tests) | Phase 18 — checklist artifact: [`docs/security-review.md`](./security-review.md); accepted risks and handovers: ADR-0036, ADR-0037 |

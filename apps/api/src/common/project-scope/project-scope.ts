@@ -31,36 +31,51 @@ export interface SessionProjectScope {
   mode: 'session';
   project: ResolvedProject;
   project_id: string;
+  /** The session user the guard resolved — audit actor (phase 12 §4.2 rule 4). */
+  user_id: string;
 }
 
 export type ProjectScope = ApiKeyProjectScope | SessionProjectScope;
 
+/**
+ * Resolves the scope attached by `ProjectAccessGuard` from a request. Exported
+ * as a plain function (phase 18) so the decorator body is unit-testable
+ * without Nest metadata plumbing; the decorator below is a one-line delegate.
+ */
+export function resolveProjectScope(request: AuthenticatedRequest): ProjectScope {
+  const apiKey = request.apiKey as ApiKeyContext | undefined;
+  const project = request.project as ResolvedProject | undefined;
+
+  if (apiKey && project) {
+    throw new Error('ProjectAccessGuard attached both API-key and session scopes');
+  }
+  if (apiKey) {
+    return {
+      mode: 'api_key',
+      key: apiKey,
+      project_id: apiKey.project_id,
+      environment: apiKey.environment,
+    };
+  }
+  if (project) {
+    const user = request.authUser;
+    if (!user) {
+      // Programming error: session mode runs only after SessionAuthGuard.
+      throw new Error('ProjectScope used without an authenticated session user');
+    }
+    return {
+      mode: 'session',
+      project,
+      project_id: project.project_id,
+      user_id: user.id,
+    };
+  }
+  // Programming error: must only be used behind ProjectAccessGuard.
+  throw new Error('ProjectScope used outside the project access guard');
+}
+
 /** Returns the scope attached by `ProjectAccessGuard`. */
 export const ProjectScope = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): ProjectScope => {
-    const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
-    const apiKey = request.apiKey as ApiKeyContext | undefined;
-    const project = request.project as ResolvedProject | undefined;
-
-    if (apiKey && project) {
-      throw new Error('ProjectAccessGuard attached both API-key and session scopes');
-    }
-    if (apiKey) {
-      return {
-        mode: 'api_key',
-        key: apiKey,
-        project_id: apiKey.project_id,
-        environment: apiKey.environment,
-      };
-    }
-    if (project) {
-      return {
-        mode: 'session',
-        project,
-        project_id: project.project_id,
-      };
-    }
-    // Programming error: must only be used behind ProjectAccessGuard.
-    throw new Error('ProjectScope used outside the project access guard');
-  },
+  (_data: unknown, ctx: ExecutionContext): ProjectScope =>
+    resolveProjectScope(ctx.switchToHttp().getRequest<AuthenticatedRequest>()),
 );
