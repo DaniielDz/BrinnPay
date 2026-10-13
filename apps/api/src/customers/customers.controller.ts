@@ -18,8 +18,11 @@ import type { CursorPage } from '../organizations/cursor';
 import { resolveRequestId } from '../request-id/request-id';
 import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
 import { RateLimit } from '../rate-limiting/rate-limit.decorator';
-import { CustomersAccessGuard } from './customers-access.guard';
-import { CustomersScope, type CustomersScope as CustomersScopeValue } from './customers-scope';
+import { ProjectAccessGuard } from '../common/project-scope/project-access.guard';
+import {
+  ProjectScope,
+  type ProjectScope as ProjectScopeValue,
+} from '../common/project-scope/project-scope';
 import { CustomersService, type CustomerResponse } from './customers.service';
 import { CustomerCreateDto } from './dto/customer-create.dto';
 import { CustomerListQueryDto } from './dto/customer-list-query.dto';
@@ -27,7 +30,7 @@ import { CustomerUpdateDto } from './dto/customer-update.dto';
 
 /**
  * Customers surface (phase 6 §4.2). Every route sits under a `project_id` path
- * parameter and is protected by the dual-mode `CustomersAccessGuard` (D8):
+ * parameter and is protected by the dual-mode `ProjectAccessGuard` (D8):
  *
  * - **session mode** (dashboard JWT): project-RBAC on the route's capability
  *   (404 non-member / 403 insufficient capability);
@@ -43,10 +46,10 @@ export class CustomersController {
 
   @Get()
   @RateLimit('read')
-  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.read' })
   list(
-    @CustomersScope() scope: CustomersScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Query() query: CustomerListQueryDto,
   ): Promise<CursorPage<CustomerResponse>> {
     return this.customers.list(scope, query);
@@ -55,10 +58,10 @@ export class CustomersController {
   @Post()
   @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.create' })
   create(
-    @CustomersScope() scope: CustomersScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Body() dto: CustomerCreateDto,
     @Req() request: { id?: unknown },
   ): Promise<CustomerResponse> {
@@ -67,10 +70,10 @@ export class CustomersController {
 
   @Get(':customer_id')
   @RateLimit('read')
-  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.read' })
   retrieve(
-    @CustomersScope() scope: CustomersScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('customer_id') customerId: string,
   ): Promise<CustomerResponse> {
     return this.customers.retrieve(scope, customerId);
@@ -78,10 +81,10 @@ export class CustomersController {
 
   @Patch(':customer_id')
   @RateLimit('write')
-  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.update' })
   update(
-    @CustomersScope() scope: CustomersScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('customer_id') customerId: string,
     @Body() dto: CustomerUpdateDto,
     @Req() request: { id?: unknown },
@@ -92,10 +95,10 @@ export class CustomersController {
   @Delete(':customer_id')
   @RateLimit('write')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @UseGuards(CustomersAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'customers.delete' })
   async remove(
-    @CustomersScope() scope: CustomersScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('customer_id') customerId: string,
     @Req() request: { id?: unknown },
   ): Promise<void> {

@@ -9,7 +9,10 @@ import { resolveRequestId } from '../request-id/request-id';
 import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
 import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { RequireCapability } from '../organizations/org-rbac.guard';
-import { PaymentsScope, type PaymentsScope as PaymentsScopeValue } from '../payments/payments-scope';
+import {
+  ProjectScope,
+  type ProjectScope as ProjectScopeValue,
+} from '../common/project-scope/project-scope';
 import { RefundCreateDto } from './dto/refund-create.dto';
 import { RefundsAccessGuard } from './refunds-access.guard';
 import { RefundsService } from './refunds.service';
@@ -24,7 +27,7 @@ export class RefundsController {
   @UseGuards(RefundsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'refunds.read' })
   list(
-    @PaymentsScope() scope: PaymentsScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('payment_id') paymentId: string,
     @Query() query: ListQueryDto,
   ): Promise<CursorPage<RefundResponse>> {
@@ -37,7 +40,7 @@ export class RefundsController {
   @UseGuards(RefundsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'refunds.create' })
   async create(
-    @PaymentsScope() scope: PaymentsScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('payment_id') paymentId: string,
     @Body() dto: RefundCreateDto,
     @Res({ passthrough: true }) response: Response,
@@ -57,7 +60,7 @@ export class RefundsController {
   @UseGuards(RefundsAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'refunds.read' })
   retrieve(
-    @PaymentsScope() scope: PaymentsScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('payment_id') paymentId: string,
     @Param('refund_id') refundId: string,
   ): Promise<RefundResponse> {

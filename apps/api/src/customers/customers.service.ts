@@ -19,7 +19,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CustomerListQueryDto } from './dto/customer-list-query.dto';
 import type { CustomerCreateDto } from './dto/customer-create.dto';
 import type { CustomerUpdateDto } from './dto/customer-update.dto';
-import type { CustomersScope } from './customers-scope';
+import type { ProjectScope } from '../common/project-scope/project-scope';
 
 /** `Customer` as contracted (phase 6 §4.2): `metadata` is always a flat string
  *  map (`{}` when absent, D6); `name` is `null` when not provided. */
@@ -52,7 +52,7 @@ function isPrismaError(error: unknown, code: string): boolean {
 /**
  * Customers domain service (phase 6 §4.2). Owns customer persistence and rules.
  *
- * The dual-mode boundary (`CustomersAccessGuard`) has already resolved the
+ * The dual-mode boundary (`ProjectAccessGuard`, phase 18 D1) has already resolved the
  * request to exactly one scope (D8) and enforced the project-level
  * authorization (session: membership + capability; API key: path project =
  * key project). This service enforces what remains:
@@ -78,7 +78,7 @@ export class CustomersService {
 
   /** List (§4.2): cursor-paginated customers of one project environment. */
   async list(
-    scope: CustomersScope,
+    scope: ProjectScope,
     query: CustomerListQueryDto,
   ): Promise<CursorPage<CustomerResponse>> {
     const environment = this.resolveListEnvironment(scope, query.environment);
@@ -108,7 +108,7 @@ export class CustomersService {
    * `requestId` is the server-assigned id of the triggering request (§4.2 rule 8).
    */
   async create(
-    scope: CustomersScope,
+    scope: ProjectScope,
     dto: CustomerCreateDto,
     requestId?: string,
   ): Promise<CustomerResponse> {
@@ -146,7 +146,7 @@ export class CustomersService {
 
   /** Retrieve (§4.2): scoped to the addressed project; an API key can only
    *  see customers of its own environment (else 404, non-disclosure). */
-  async retrieve(scope: CustomersScope, customerId: string): Promise<CustomerResponse> {
+  async retrieve(scope: ProjectScope, customerId: string): Promise<CustomerResponse> {
     const customer = await this.findScopedCustomer(scope, customerId);
     return toCustomerResponse(customer);
   }
@@ -162,7 +162,7 @@ export class CustomersService {
    * Changed field values are never echoed into `data` (D13).
    */
   async update(
-    scope: CustomersScope,
+    scope: ProjectScope,
     customerId: string,
     dto: CustomerUpdateDto,
     requestId?: string,
@@ -230,7 +230,7 @@ export class CustomersService {
    * transaction (D7); the entry's plain-id `resource_id` keeps referencing the
    * deleted customer, which is exactly why no FK points at it (D8/§6.1).
    */
-  async delete(scope: CustomersScope, customerId: string, requestId?: string): Promise<void> {
+  async delete(scope: ProjectScope, customerId: string, requestId?: string): Promise<void> {
     const customer = await this.findScopedCustomer(scope, customerId);
 
     const linked = await this.prisma.payment.count({ where: { customerId: customer.id } });
@@ -276,7 +276,7 @@ export class CustomersService {
    * `required: false` covers this API-key path).
    */
   private resolveListEnvironment(
-    scope: CustomersScope,
+    scope: ProjectScope,
     explicit: Environment | undefined,
   ): Environment {
     if (scope.mode === 'api_key') {
@@ -300,7 +300,7 @@ export class CustomersService {
 
   /** Create environment check: session → DTO-required body value; API key →
    *  the body value must equal the key's environment (422 on mismatch). */
-  private resolveCreateEnvironment(scope: CustomersScope, body: Environment): Environment {
+  private resolveCreateEnvironment(scope: ProjectScope, body: Environment): Environment {
     if (scope.mode === 'api_key') {
       if (body !== scope.environment) {
         this.environmentMismatch();
@@ -334,7 +334,7 @@ export class CustomersService {
    * explicit environment.
    */
   private async findScopedCustomer(
-    scope: CustomersScope,
+    scope: ProjectScope,
     customerId: string,
   ): Promise<{
     id: string;

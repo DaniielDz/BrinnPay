@@ -1,4 +1,4 @@
-import type { PaymentsScope } from '../payments/payments-scope';
+import type { ProjectScope } from '../common/project-scope/project-scope';
 import type { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { IdempotencyService } from '../idempotency/idempotency.service';
@@ -10,7 +10,7 @@ const PAYMENT_ID = '0192f2a0-0000-7000-8000-00000000000d';
 const REFUND_ID = '0192f2a0-0000-7000-8000-00000000000e';
 const USER_ID = '0192f2a0-0000-7000-8000-00000000000f';
 
-function sessionScope(): PaymentsScope {
+function sessionScope(): ProjectScope {
   return {
     mode: 'session',
     project: { project_id: PROJECT_ID, organization_id: 'org-1' },
@@ -131,7 +131,7 @@ describe('RefundsService audit capture (phase 12 §5.4, D13)', () => {
   });
 
   it('attributes API-key mode to the key that acted (§5.6 rule 3)', async () => {
-    const apiKeyScope: PaymentsScope = {
+    const apiKeyScope: ProjectScope = {
       mode: 'api_key',
       key: { key_id: 'key-1', project_id: PROJECT_ID, organization_id: 'org-1', environment: 'test' },
       project_id: PROJECT_ID,

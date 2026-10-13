@@ -8,8 +8,6 @@ import 'reflect-metadata';
 import { AppModule } from '../src/app.module';
 import { GLOBAL_PREFIX_EXCLUSIONS, configureApp } from '../src/bootstrap';
 import { ApiKeyAuthGuard } from '../src/api-keys/api-key-auth.guard';
-import { CustomersAccessGuard } from '../src/customers/customers-access.guard';
-import { PaymentsAccessGuard } from '../src/payments/payments-access.guard';
 import { RefundsAccessGuard } from '../src/refunds/refunds-access.guard';
 import { ProjectAccessGuard } from '../src/common/project-scope/project-access.guard';
 import { ApiKeyRateLimitGuard } from '../src/rate-limiting/api-key-rate-limit.guard';
@@ -23,13 +21,14 @@ import { RATE_LIMIT_CLASS_METADATA } from '../src/rate-limiting/rate-limit.decor
  * `api_key` bucket (D5, D7).
  *
  * This is derived from the guards rather than from a list of routes, so adding a
- * route to a dual-mode controller is covered the moment it is written.
+ * route to a dual-mode controller is covered the moment it is written. Phase 18
+ * D1 consolidated the payments/customers clones into `ProjectAccessGuard`, so
+ * the dual-mode surface is now exactly the shared guard plus the payment-nested
+ * refunds guard.
  */
 const API_KEY_CAPABLE_GUARDS: readonly unknown[] = [
   ApiKeyAuthGuard,
   ProjectAccessGuard,
-  CustomersAccessGuard,
-  PaymentsAccessGuard,
   RefundsAccessGuard,
 ];
 

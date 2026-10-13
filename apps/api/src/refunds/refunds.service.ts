@@ -10,7 +10,7 @@ import { uuidv7 } from '../common/uuid/uuid';
 import { REFUNDS_CREATE_SCOPE } from '../idempotency/idempotency-operation';
 import { IdempotencyService, type IdempotentResult, type IdempotencyTransaction } from '../idempotency/idempotency.service';
 import { buildCursorPage, cursorToWhere, DEFAULT_LIST_LIMIT, type CursorPage, type ListQueryDto } from '../organizations/cursor';
-import type { PaymentsScope } from '../payments/payments-scope';
+import type { ProjectScope } from '../common/project-scope/project-scope';
 import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { isUuidLike } from '../projects/projects.service';
@@ -34,7 +34,7 @@ export class RefundsService {
     @Inject(AUDIT_LOG_PORT) private readonly audit: AuditLogPort,
   ) {}
 
-  async list(scope: PaymentsScope, paymentId: string, query: ListQueryDto): Promise<CursorPage<RefundResponse>> {
+  async list(scope: ProjectScope, paymentId: string, query: ListQueryDto): Promise<CursorPage<RefundResponse>> {
     const payment = await this.findPayment(this.prisma, scope, paymentId);
     const limit = query.limit ?? DEFAULT_LIST_LIMIT;
     const rows = await this.prisma.refund.findMany({
@@ -45,7 +45,7 @@ export class RefundsService {
     return buildCursorPage(rows.map((row) => toRefundResponse(row, payment)), limit);
   }
 
-  async retrieve(scope: PaymentsScope, paymentId: string, refundId: string): Promise<RefundResponse> {
+  async retrieve(scope: ProjectScope, paymentId: string, refundId: string): Promise<RefundResponse> {
     const payment = await this.findPayment(this.prisma, scope, paymentId);
     if (!isUuidLike(refundId)) throw notFound();
     const row = await this.prisma.refund.findFirst({ where: { id: refundId, paymentId: payment.id } });
@@ -54,7 +54,7 @@ export class RefundsService {
   }
 
   async create(
-    scope: PaymentsScope,
+    scope: ProjectScope,
     paymentId: string,
     dto: RefundCreateDto,
     key?: string,
@@ -80,7 +80,7 @@ export class RefundsService {
 
   private async createInTransaction(
     tx: IdempotencyTransaction,
-    scope: PaymentsScope,
+    scope: ProjectScope,
     paymentId: string,
     dto: RefundCreateDto,
     requestId?: string,
@@ -153,7 +153,7 @@ export class RefundsService {
     };
   }
 
-  private async findPayment(tx: IdempotencyTransaction, scope: PaymentsScope, paymentId: string) {
+  private async findPayment(tx: IdempotencyTransaction, scope: ProjectScope, paymentId: string) {
     if (!isUuidLike(paymentId)) throw paymentNotFound();
     const payment = await tx.payment.findFirst({
       where: {

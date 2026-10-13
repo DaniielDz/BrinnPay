@@ -6,22 +6,23 @@ import { AuditLoggingCoreModule } from '../audit-logging/audit-logging-core.modu
 import { IdempotencyModule } from '../idempotency/idempotency.module';
 import { DEFAULT_SIMULATION_DELAYS, PAYMENT_DELAYS } from './payment-simulation';
 import { WebhooksCoreModule } from '../webhooks/webhooks-core.module';
-import { PaymentsAccessGuard } from './payments-access.guard';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 
 /**
- * Payments domain module (phase 7): simulated payment operations with the
- * default-success state machine behind the dual-mode access boundary (API key
- * or session JWT, D11), the payment RBAC capabilities (D5), the money helper
- * boundary (D8), and the payment event seam (D10 — a no-op sink until
- * Phase 10 wires persistence/delivery).
+ * Payments domain module (phase 7): simulated payment operations behind the
+ * shared dual-mode access boundary (API key or session JWT —
+ * `ProjectAccessGuard`, phase 18 D1 consolidated the phase 7 clone into it),
+ * the payment RBAC capabilities (D5), the money helper boundary (D8), and the
+ * payment event seam (D10 — a no-op sink until Phase 10 wires
+ * persistence/delivery).
  *
- * ApiKeysModule provides `ApiKeyAuthGuard` (delegated to in API-key mode);
- * the session boundary (`SessionAuthGuard`) is provided globally by the auth
- * module. The simulation delays are env-configurable via the shared
- * configuration (defaults in `DEFAULT_SIMULATION_DELAYS`) so tests run
- * deterministically.
+ * ApiKeysModule is imported so the shared guard's API-key half resolves in
+ * this module's context (Nest resolves a controller's guard in the declaring
+ * module's context). The session boundary (`SessionAuthGuard`) is provided
+ * globally by the auth module. The simulation delays are env-configurable via
+ * the shared configuration (defaults in `DEFAULT_SIMULATION_DELAYS`) so tests
+ * run deterministically.
  *
  * IdempotencyModule (phase 8) supplies the cross-cutting claim/replay
  * capability that `payments.create` executes its mutation through.
@@ -42,7 +43,6 @@ import { PaymentsService } from './payments.service';
   controllers: [PaymentsController],
   providers: [
     PaymentsService,
-    PaymentsAccessGuard,
     {
       provide: PAYMENT_DELAYS,
       useFactory: (config: ConfigService) => ({

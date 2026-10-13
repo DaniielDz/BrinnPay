@@ -1,12 +1,12 @@
 import { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
-import { ApiKeyAuthGuard } from '../api-keys/api-key-auth.guard';
-import { SessionAuthGuard } from '../auth/session-auth.guard';
-import { PrismaService } from '../prisma/prisma.service';
-import { RequireCapability } from '../organizations/org-rbac.guard';
-import type { Capability } from '../organizations/roles';
-import { PaymentsAccessGuard } from './payments-access.guard';
+import { ApiKeyAuthGuard } from '../../api-keys/api-key-auth.guard';
+import { SessionAuthGuard } from '../../auth/session-auth.guard';
+import { PrismaService } from '../../prisma/prisma.service';
+import { RequireCapability } from '../../organizations/org-rbac.guard';
+import type { Capability } from '../../organizations/roles';
+import { ProjectAccessGuard } from './project-access.guard';
 
 type Handler = () => void;
 
@@ -15,12 +15,12 @@ const REFLECTOR = new Reflector();
 const USER_ID = '0192f2a0-0000-7000-8000-000000000008';
 const ORG_ID = '0192f2a0-0000-7000-8000-00000000000a';
 const PROJECT_ID = '0192f2a0-0000-7000-8000-00000000000b';
-const API_KEY = 'sk_live_payments-guard-fixture';
+const API_KEY = 'sk_live_project-guard-fixture';
 
 const PROJECT_ROW = {
   id: PROJECT_ID,
   organizationId: ORG_ID,
-  name: 'Payments API',
+  name: 'Shared Guard',
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -50,12 +50,12 @@ interface Mocks {
 function setup(prisma: {
   project: { findUnique: jest.Mock };
   organizationMember: { findUnique: jest.Mock };
-}): { guard: PaymentsAccessGuard; mocks: Mocks } {
+}): { guard: ProjectAccessGuard; mocks: Mocks } {
   const mocks: Mocks = {
     apiKeyAuth: { canActivate: jest.fn() },
     sessionAuth: { canActivate: jest.fn() },
   };
-  const guard = new PaymentsAccessGuard(
+  const guard = new ProjectAccessGuard(
     REFLECTOR,
     prisma as unknown as PrismaService,
     mocks.apiKeyAuth as unknown as ApiKeyAuthGuard,
@@ -79,7 +79,13 @@ function contextFor(
   } as unknown as ExecutionContext;
 }
 
-describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 customers guard)', () => {
+/**
+ * Characterization suite of the shared dual-mode access boundary (phase 10
+ * §14; phase 18 D1 — consolidated from the phase 6/7 clone guard specs with
+ * the behavior unchanged: webhooks, payments, and customers all ran these
+ * exact semantics through their own copies before consolidation).
+ */
+describe('ProjectAccessGuard (shared dual-mode boundary, phase 18 D1)', () => {
   let prisma: {
     project: { findUnique: jest.Mock };
     organizationMember: { findUnique: jest.Mock };
@@ -95,16 +101,28 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
   });
 
   describe('API-key mode (sk_… token)', () => {
-    it('delegates to ApiKeyAuthGuard and accepts the key’s own project (no RBAC queries)', async () => {
-      const { guard, mocks } = setup(prisma);
+    function attachKey(
+      mocks: Mocks,
+      context: { project_id: string; environment: string } = {
+        project_id: PROJECT_ID,
+        environment: 'live',
+      },
+    ): void {
       mocks.apiKeyAuth.canActivate.mockImplementation(async (ctx: ExecutionContext) => {
         const req = ctx.switchToHttp().getRequest() as { apiKey?: unknown };
-        req.apiKey = { key_id: 'key-1', project_id: PROJECT_ID, environment: 'live' };
+        req.apiKey = { key_id: 'key-1', ...context };
         return true;
       });
+    }
+
+    it('delegates to ApiKeyAuthGuard and accepts the key’s own project (no RBAC queries)', async () => {
+      const { guard, mocks } = setup(prisma);
+      attachKey(mocks);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, `Bearer ${API_KEY}`)),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, `Bearer ${API_KEY}`),
+        ),
       ).resolves.toBe(true);
 
       expect(mocks.apiKeyAuth.canActivate).toHaveBeenCalledTimes(1);
@@ -116,40 +134,38 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
 
     it('rejects a path project that is not the key’s project with 404 (non-disclosure)', async () => {
       const { guard, mocks } = setup(prisma);
-      mocks.apiKeyAuth.canActivate.mockImplementation(async (ctx: ExecutionContext) => {
-        const req = ctx.switchToHttp().getRequest() as { apiKey?: unknown };
-        req.apiKey = { key_id: 'key-1', project_id: PROJECT_ID, environment: 'live' };
-        return true;
-      });
+      attachKey(mocks);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: '0192f2a0-0000-7000-8000-0000000000dd' }, `Bearer ${API_KEY}`)),
-      ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+        guard.canActivate(
+          contextFor(
+            decoratedHandler('payments.read'),
+            { project_id: '0192f2a0-0000-7000-8000-0000000000dd' },
+            `Bearer ${API_KEY}`,
+          ),
+        ),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404, message: 'Project not found' });
     });
 
     it('rejects a malformed project_id with 404', async () => {
       const { guard, mocks } = setup(prisma);
-      mocks.apiKeyAuth.canActivate.mockImplementation(async (ctx: ExecutionContext) => {
-        const req = ctx.switchToHttp().getRequest() as { apiKey?: unknown };
-        req.apiKey = { key_id: 'key-1', project_id: PROJECT_ID, environment: 'live' };
-        return true;
-      });
+      attachKey(mocks);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: 'not-a-uuid' }, `Bearer ${API_KEY}`)),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.read'), { project_id: 'not-a-uuid' }, `Bearer ${API_KEY}`),
+        ),
       ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
     });
 
     it('lets an API key with any capability requirement pass (capability not evaluated)', async () => {
       const { guard, mocks } = setup(prisma);
-      mocks.apiKeyAuth.canActivate.mockImplementation(async (ctx: ExecutionContext) => {
-        const req = ctx.switchToHttp().getRequest() as { apiKey?: unknown };
-        req.apiKey = { key_id: 'key-1', project_id: PROJECT_ID, environment: 'live' };
-        return true;
-      });
+      attachKey(mocks);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.create'), { project_id: PROJECT_ID }, `Bearer ${API_KEY}`)),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.create'), { project_id: PROJECT_ID }, `Bearer ${API_KEY}`),
+        ),
       ).resolves.toBe(true);
       expect(prisma.organizationMember.findUnique).not.toHaveBeenCalled();
     });
@@ -168,7 +184,10 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
       const { guard, mocks } = setup(prisma);
       attachSession(mocks);
 
-      const request = { headers: { authorization: 'Bearer some.jwt.token' }, params: { project_id: PROJECT_ID } } as {
+      const request = {
+        headers: { authorization: 'Bearer some.jwt.token' },
+        params: { project_id: PROJECT_ID },
+      } as {
         organizationMembership?: unknown;
         project?: unknown;
       };
@@ -193,7 +212,9 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
       prisma.organizationMember.findUnique.mockResolvedValue({ ...MEMBER_ROW, role: 'viewer' });
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.create'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token')),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.create'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token'),
+        ),
       ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
     });
 
@@ -203,8 +224,29 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
       prisma.organizationMember.findUnique.mockResolvedValue(null);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token')),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token'),
+        ),
       ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    });
+
+    it('does not attach the project context on a non-member 404 (request-log null scope)', async () => {
+      const { guard, mocks } = setup(prisma);
+      attachSession(mocks);
+      prisma.organizationMember.findUnique.mockResolvedValue(null);
+
+      const request = {
+        headers: { authorization: 'Bearer some.jwt.token' },
+        params: { project_id: PROJECT_ID },
+      } as { project?: unknown; organizationMembership?: unknown };
+      const ctx = {
+        switchToHttp: () => ({ getRequest: () => request }),
+        getHandler: () => decoratedHandler('payments.read'),
+      } as unknown as ExecutionContext;
+
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({ status: 404 });
+      expect(request.project).toBeUndefined();
+      expect(request.organizationMembership).toBeUndefined();
     });
 
     it('returns 404 for an unknown project without checking membership', async () => {
@@ -213,7 +255,9 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
       prisma.project.findUnique.mockResolvedValue(null);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token')),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token'),
+        ),
       ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
       expect(prisma.organizationMember.findUnique).not.toHaveBeenCalled();
     });
@@ -223,7 +267,9 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
       attachSession(mocks);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: 'not-a-uuid' }, 'Bearer some.jwt.token')),
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.read'), { project_id: 'not-a-uuid' }, 'Bearer some.jwt.token'),
+        ),
       ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
       expect(prisma.project.findUnique).not.toHaveBeenCalled();
     });
@@ -243,8 +289,10 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
       mocks.sessionAuth.canActivate.mockResolvedValue(true);
 
       await expect(
-        guard.canActivate(contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token')),
-      ).rejects.toThrow('PaymentsAccessGuard used without SessionAuthGuard');
+        guard.canActivate(
+          contextFor(decoratedHandler('payments.read'), { project_id: PROJECT_ID }, 'Bearer some.jwt.token'),
+        ),
+      ).rejects.toThrow('ProjectAccessGuard used without SessionAuthGuard');
     });
   });
 
@@ -254,6 +302,6 @@ describe('PaymentsAccessGuard (phase 7 §4.3, D11 — mirroring the phase 6 cust
 
     await expect(
       guard.canActivate(contextFor(handler, { project_id: PROJECT_ID }, `Bearer ${API_KEY}`)),
-    ).rejects.toThrow('PaymentsAccessGuard requires @RequireCapability on the route handler');
+    ).rejects.toThrow('ProjectAccessGuard requires @RequireCapability on the route handler');
   });
 });

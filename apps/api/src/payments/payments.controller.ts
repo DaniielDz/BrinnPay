@@ -15,21 +15,25 @@ import {
 import type { Response } from 'express';
 
 import type { CursorPage } from '../organizations/cursor';
+import { ProjectAccessGuard } from '../common/project-scope/project-access.guard';
+import {
+  ProjectScope,
+  type ProjectScope as ProjectScopeValue,
+} from '../common/project-scope/project-scope';
 import { resolveRequestId } from '../request-id/request-id';
 import { ApiKeyRateLimitGuard } from '../rate-limiting/api-key-rate-limit.guard';
 import { RateLimit } from '../rate-limiting/rate-limit.decorator';
 import { RequireCapability } from '../organizations/org-rbac.guard';
 import { PaymentCreateDto } from './dto/payment-create.dto';
 import { PaymentListQueryDto } from './dto/payment-list-query.dto';
-import { PaymentsAccessGuard } from './payments-access.guard';
-import { PaymentsScope, type PaymentsScope as PaymentsScopeValue } from './payments-scope';
 import { PaymentsService } from './payments.service';
 import type { PaymentResponse } from './payment-types';
 
 /**
  * Payments surface (phase 7 §4.2/§4.3). Every route sits under a `project_id`
- * path parameter and is protected by the dual-mode `PaymentsAccessGuard`
- * (D11, mirroring Phase 6 D8):
+ * path parameter and is protected by the shared dual-mode
+ * `ProjectAccessGuard` (phase 10 §14; phase 18 D1 consolidated the phase 7
+ * clone into it with no behavior change):
  *
  * - **session mode** (dashboard JWT): project-RBAC on the route's capability
  *   (404 non-member / 403 insufficient capability);
@@ -50,10 +54,10 @@ export class PaymentsController {
 
   @Get()
   @RateLimit('read')
-  @UseGuards(PaymentsAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'payments.read' })
   list(
-    @PaymentsScope() scope: PaymentsScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Query() query: PaymentListQueryDto,
   ): Promise<CursorPage<PaymentResponse>> {
     return this.payments.list(scope, query);
@@ -62,10 +66,10 @@ export class PaymentsController {
   @Post()
   @RateLimit('write')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(PaymentsAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'payments.create' })
   async create(
-    @PaymentsScope() scope: PaymentsScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Body() dto: PaymentCreateDto,
     @Res({ passthrough: true }) response: Response,
     @Headers('idempotency-key') idempotencyKey?: string,
@@ -85,10 +89,10 @@ export class PaymentsController {
 
   @Get(':payment_id')
   @RateLimit('read')
-  @UseGuards(PaymentsAccessGuard, ApiKeyRateLimitGuard)
+  @UseGuards(ProjectAccessGuard, ApiKeyRateLimitGuard)
   @RequireCapability({ capability: 'payments.read' })
   retrieve(
-    @PaymentsScope() scope: PaymentsScopeValue,
+    @ProjectScope() scope: ProjectScopeValue,
     @Param('payment_id') paymentId: string,
   ): Promise<PaymentResponse> {
     return this.payments.retrieve(scope, paymentId);

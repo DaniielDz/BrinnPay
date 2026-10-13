@@ -39,7 +39,7 @@ import {
 import type { PaymentRow, PaymentResponse } from './payment-types';
 import { toPaymentResponse } from './payment-types';
 import type { PaymentStatus } from './payment-types';
-import type { PaymentsScope } from './payments-scope';
+import type { ProjectScope } from '../common/project-scope/project-scope';
 import { WEBHOOK_EVENT_PORT, type WebhookEventPort } from '../webhooks/webhook-events';
 
 const PAYMENT_NOT_FOUND = () => new ApiError(ErrorCode.NOT_FOUND, 'Payment not found', 404);
@@ -58,7 +58,7 @@ type EdgeOutcome = 'applied' | 'lost' | 'rolled-back';
 /**
  * Payments domain service (phase 7 §4.2/§4.6/§4.7).
  *
- * The dual-mode boundary (`PaymentsAccessGuard`) has already resolved the
+ * The dual-mode boundary (`ProjectAccessGuard`, phase 18 D1) has already resolved the
  * request to exactly one scope (D11) and enforced the project-level
  * authorization (session: membership + capability; API key: path project =
  * key project). This service enforces what remains:
@@ -119,7 +119,7 @@ export class PaymentsService {
    *  non-terminal payments whose scheduled time has passed are advanced
    *  before the page is assembled (D2). */
   async list(
-    scope: PaymentsScope,
+    scope: ProjectScope,
     query: PaymentListQueryDto,
   ): Promise<CursorPage<PaymentResponse>> {
     const environment = this.resolveListEnvironment(scope, query.environment);
@@ -157,7 +157,7 @@ export class PaymentsService {
    * never describe a payment that was rolled back (phase 8 §10).
    */
   async create(
-    scope: PaymentsScope,
+    scope: ProjectScope,
     dto: PaymentCreateDto,
     idempotencyKey?: string,
     requestId?: string,
@@ -251,7 +251,7 @@ export class PaymentsService {
    *  see payments of its own environment (else 404, non-disclosure). A
    *  non-terminal payment whose scheduled time has passed is advanced before
    *  responding (D2). */
-  async retrieve(scope: PaymentsScope, paymentId: string): Promise<PaymentResponse> {
+  async retrieve(scope: ProjectScope, paymentId: string): Promise<PaymentResponse> {
     const payment = await this.findScopedPayment(scope, paymentId);
     const advanced = await this.advance(payment, new Date());
     return toPaymentResponse(advanced);
@@ -269,7 +269,7 @@ export class PaymentsService {
    * `required: false` covers this API-key path).
    */
   private resolveListEnvironment(
-    scope: PaymentsScope,
+    scope: ProjectScope,
     explicit: Environment | undefined,
   ): Environment {
     if (scope.mode === 'api_key') {
@@ -293,7 +293,7 @@ export class PaymentsService {
 
   /** Create environment check: session → DTO-required body value; API key →
    *  the body value must equal the key's environment (422 on mismatch). */
-  private resolveCreateEnvironment(scope: PaymentsScope, body: Environment): Environment {
+  private resolveCreateEnvironment(scope: ProjectScope, body: Environment): Environment {
     if (scope.mode === 'api_key') {
       if (body !== scope.environment) {
         this.environmentMismatch();
@@ -473,7 +473,7 @@ export class PaymentsService {
    * the payment id is the address and project scoping is the isolation
    * boundary (D12).
    */
-  private async findScopedPayment(scope: PaymentsScope, paymentId: string): Promise<PaymentRow> {
+  private async findScopedPayment(scope: ProjectScope, paymentId: string): Promise<PaymentRow> {
     if (!isUuidLike(paymentId)) {
       throw PAYMENT_NOT_FOUND();
     }
