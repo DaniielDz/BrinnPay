@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "loadtest"
 
 # Build-script approval (pnpm 12 blocks unapproved build scripts by default):
 # - Prisma engines are required by @prisma/client at runtime;

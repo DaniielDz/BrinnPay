@@ -55,4 +55,10 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
+
+# Load-test harness (phase 19): runtime state (generated credentials for the
+# local stack — never committed) and raw per-run results. The committed
+# artifacts are docs/performance-baseline.md and docs/performance-findings.md.
+loadtest/.state/
+loadtest/results/
 ```

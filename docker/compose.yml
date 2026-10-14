@@ -69,6 +69,16 @@ services:
       RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX: ${RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX:-10}
       RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS: ${RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS:-3600}
       RATE_LIMIT_FAIL_MODE: ${RATE_LIMIT_FAIL_MODE:-open}
+      # The auth.* classes keep their phase-3 names (ADR-0024 catalog). Listed
+      # explicitly, with the code defaults, so a local load stack can raise the
+      # *IP* scopes through ordinary documented config (phase 19 AC7) — the
+      # account scope stays at its ADR-0037 AR-3 default by design, and no
+      # default value changes here.
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-900}
+      AUTH_RATE_LIMIT_IP_LOGIN_MAX: ${AUTH_RATE_LIMIT_IP_LOGIN_MAX:-10}
+      AUTH_RATE_LIMIT_ACCOUNT_LOGIN_MAX: ${AUTH_RATE_LIMIT_ACCOUNT_LOGIN_MAX:-10}
+      AUTH_RATE_LIMIT_IP_REFRESH_MAX: ${AUTH_RATE_LIMIT_IP_REFRESH_MAX:-60}
+      AUTH_RATE_LIMIT_IP_READ_MAX: ${AUTH_RATE_LIMIT_IP_READ_MAX:-100}
       # No proxy in the local stack: the socket peer is the client, and forwarded
       # headers are ignored for limit purposes (D1).
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
@@ -99,7 +109,16 @@ services:
   # signs and performs the delivery attempts, runs the reconciliation and payment
   # advancement sweeps, and prunes expired events. It shares the database, Redis,
   # and the webhook encryption key, and exposes no HTTP port.
+  #
+  # Opt-in via the `worker` profile: the phase-10 e2e suites manage their own
+  # workers in-process and assert untouched queue state (attempts=0, status
+  # pending), which a long-running consumer would break. Start it explicitly
+  # when you need live deliveries/sweeps on the dev stack:
+  #   docker compose --profile worker up -d
+  # The phase-19 load-test runner always enables this profile (its scenarios
+  # measure sweep- and worker-driven behavior on an isolated stack).
   worker:
+    profiles: ["worker"]
     build:
       context: ..
       dockerfile: docker/api/Dockerfile

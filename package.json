@@ -12,7 +12,9 @@
     "test:e2e": "pnpm -r test:e2e",
     "test:coverage": "pnpm --filter @brinnpay/api test:coverage && pnpm --filter @brinnpay/web test:coverage",
     "test:browser": "pnpm --filter @brinnpay/web test:browser",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "loadtest": "node loadtest/scripts/run.mjs",
+    "loadtest:inspect": "node loadtest/scripts/inspect.mjs"
   },
   "keywords": [],
   "author": "",

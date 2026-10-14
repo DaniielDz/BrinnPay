@@ -205,6 +205,46 @@ describe('payments page (phase 7 §5.2, D1/D2/D3/D5)', () => {
     ).toBeGreaterThan(paymentsCallsBefore);
   });
 
+  it('stands the background poll down after "Load more" so appended pages are not collapsed (phase 19 P5)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setEnvironmentQuery(null);
+    paramsMock.mockReturnValue({ projectId: projectFixture.id });
+    const api = stubPaymentsApi({ paginate: true });
+    render(
+      <AuthProvider>
+        <ProjectPaymentsPage />
+      </AuthProvider>,
+    );
+
+    // Page 1 is the non-terminal payment; "Load more" appends the second row.
+    await screen.findByText('$10.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await screen.findByText('$40.00');
+    expect(screen.getByText('pending')).toBeInTheDocument();
+
+    const paymentsCallsBefore = api.fetchMock.mock.calls.filter(([url]) =>
+      String(url).includes('/payments'),
+    ).length;
+
+    // Two poll windows elapse while the pending payment is still moving: the
+    // poll must not fire a list re-fetch (it would replace the whole list with
+    // page 1, dropping the appended row).
+    await vi.advanceTimersByTimeAsync(6_100);
+    expect(
+      api.fetchMock.mock.calls.filter(([url]) => String(url).includes('/payments')).length,
+    ).toBe(paymentsCallsBefore);
+    expect(screen.getByText('$40.00')).toBeInTheDocument();
+
+    // A manual Refresh resets the appended state and reloads page 1.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0]);
+    await waitFor(() => {
+      expect(screen.queryByText('$40.00')).not.toBeInTheDocument();
+    });
+    expect(
+      api.fetchMock.mock.calls.filter(([url]) => String(url).includes('/payments')).length,
+    ).toBeGreaterThan(paymentsCallsBefore);
+  });
+
   it('non-member reaching the page is treated as not-found (project access semantics)', async () => {
     setEnvironmentQuery(null);
     paramsMock.mockReturnValue({ projectId: projectFixture.id });
