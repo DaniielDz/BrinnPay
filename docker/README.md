@@ -54,6 +54,23 @@ docker compose up --build
 - Source directories are mounted into the API and web containers for hot
   reload in development.
 
+### Webhook worker (opt-in profile)
+
+The phase-10 webhook worker (delivery attempts, retries, reconciliation,
+payment-advancement sweeps) runs **only when its compose profile is
+enabled**:
+
+```sh
+docker compose --profile worker up -d        # start (with the rest) or
+docker compose --profile worker up -d worker # start just the worker
+```
+
+It is profile-gated because the e2e suite manages its own workers in-process
+and asserts untouched queue state; a long-running worker on the shared
+Redis would steal queued deliveries and fail those tests. The phase-19
+load-test runner uses a separate compose project and always enables the
+profile (its scenarios measure sweep- and worker-driven behavior).
+
 ## Secrets
 
 No secrets are committed in this directory. Credential defaults are

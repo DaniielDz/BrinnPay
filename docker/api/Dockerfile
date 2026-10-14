@@ -20,6 +20,15 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/api/prisma apps/api/prisma
 COPY apps/api/prisma.config.ts apps/api/prisma.config.ts
+# `pnpm dev` (`nest start --watch`) compiles inside the container and needs
+# these next to the (bind-mounted) source; without them the dev API exits
+# immediately with "Could not find TypeScript configuration file".
+COPY apps/api/nest-cli.json apps/api/nest-cli.json
+COPY apps/api/tsconfig.json apps/api/tsconfig.json
+COPY apps/api/tsconfig.build.json apps/api/tsconfig.build.json
+# Boot-time OpenAPI/Swagger setup resolves the canonical contract at
+# /app/docs/openapi.yaml (OPENAPI_PATH default); missing ⇒ bootstrap throws.
+COPY docs docs
 
 RUN pnpm install --frozen-lockfile \
   && pnpm --filter @brinnpay/api prisma:generate
