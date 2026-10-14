@@ -73,6 +73,9 @@ export interface PaymentsApiBehaviour {
   failCreate?: { code: string; message: string; status: number };
   session?: AuthSession;
   payments?: Payment[];
+  /** Page the payments list at size 1 (cursor per the API contract) so a
+   *  test can exercise "Load more" and appended-page behaviour (phase 19 P5). */
+  paginate?: boolean;
 }
 
 /**
@@ -151,14 +154,26 @@ export function stubPaymentsApi(behaviour: PaymentsApiBehaviour = {}) {
         }
         const query = new URLSearchParams(fullUrl.split('?')[1] ?? '');
         const environment = query.get('environment') ?? 'test';
+        const rows = store.payments
+          .filter(
+            (payment) => payment.environment === environment && payment.project_id === paymentsListPath[1],
+          )
+          .map((payment) => ({ ...payment }));
+        if (behaviour.paginate) {
+          const cursor = query.get('cursor');
+          const offset = cursor ? rows.findIndex((payment) => payment.id === cursor) + 1 : 0;
+          const pageRows = rows.slice(offset, offset + 1);
+          const has_more = offset + pageRows.length < rows.length;
+          return respond(200, {
+            data: pageRows,
+            next_cursor: has_more ? (pageRows.at(-1)?.id ?? null) : null,
+            has_more,
+          });
+        }
         return respond(200, {
           // Copies, never references: React state may only change through an
           // actual list re-fetch (the poll), never through store mutation.
-          data: store.payments
-            .filter(
-              (payment) => payment.environment === environment && payment.project_id === paymentsListPath[1],
-            )
-            .map((payment) => ({ ...payment })),
+          data: rows,
           next_cursor: null,
           has_more: false,
         });

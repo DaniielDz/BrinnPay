@@ -75,6 +75,12 @@ export default function ProjectPaymentsPage() {
 
   const [selected, setSelected] = useState<Payment | null>(null);
 
+  // True once the user appended pages with "Load more": the background poll
+  // must not collapse the appended rows back to page 1 (phase 19 §6 P5/F-W6);
+  // a manual Refresh, an environment change or a create resets it via
+  // `loadPayments(null)`.
+  const [appendedPages, setAppendedPages] = useState(false);
+
   const selectedEnvironment: Environment = useMemo(() => {
     const selected = searchParams.get('environment');
     return selected !== null && isEnvironment(selected) ? selected : 'test';
@@ -92,6 +98,7 @@ export default function ProjectPaymentsPage() {
         setPayments((current) => (cursor ? [...current, ...page.data] : page.data));
         setNextCursor(page.next_cursor);
         setHasMore(page.has_more);
+        setAppendedPages(cursor !== null);
         // Keep the open detail in sync with the authoritative snapshot.
         if (!cursor) {
           setSelected((current) => {
@@ -145,16 +152,18 @@ export default function ProjectPaymentsPage() {
 
   // The default-success simulation makes every payment terminal within the
   // two configured delays; while any visible payment is still moving, poll so
-  // the page reflects the lifecycle without a manual reload.
+  // the page reflects the lifecycle without a manual reload. Once the user has
+  // paged deeper the poll stands down (it would replace the whole list with
+  // page 1); manual Refresh still reloads and re-enables it.
   useEffect(() => {
-    if (!accessToken || payments.length === 0) return;
+    if (!accessToken || payments.length === 0 || appendedPages) return;
     const active = payments.some((payment) => !isTerminalPayment(payment));
     if (!active) return;
     const timer = setInterval(() => {
       void loadPayments(null);
     }, PAYMENT_POLL_MS);
     return () => clearInterval(timer);
-  }, [accessToken, payments, loadPayments]);
+  }, [accessToken, payments, loadPayments, appendedPages]);
 
   // Customer options for the create select (owner/admin only, D1/D3): the
   // same project+environment as the payment will live in.
