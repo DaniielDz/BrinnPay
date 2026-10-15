@@ -407,3 +407,148 @@ describe('rate limiting configuration (phase 13 §5/§6.2)', () => {
     });
   });
 });
+
+/**
+ * The observability knobs (phase 20 D1/D4/D7). Exercised through the loader,
+ * like every other boot-critical surface above: these values decide whether
+ * an endpoint is exposed at all, which path it answers on, and whether a
+ * scrape needs a credential — so a mistake must fail here, in milliseconds,
+ * rather than shipping an unauthenticated exposition or a path that collides
+ * with a health probe.
+ */
+describe('metrics configuration (phase 20 D1/D4/D7)', () => {
+  const saved: Record<string, string | undefined> = {};
+  const KEYS = [
+    'METRICS_ENABLED',
+    'METRICS_PATH',
+    'METRICS_SCRAPE_TOKEN',
+    'WORKER_METRICS_PORT',
+    'SWAGGER_PATH',
+    'JWT_SECRET',
+    'WEBHOOK_ENCRYPTION_KEY',
+  ];
+
+  beforeEach(() => {
+    for (const key of KEYS) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    // Required by `loadConfiguration` in every profile (see the cases above).
+    process.env.WEBHOOK_ENCRYPTION_KEY = Buffer.alloc(32, 0x2b).toString('base64');
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it('defaults to on outside production and off inside it (D4(a))', () => {
+    // AC1 wants a clean local checkout scrapeable with zero setup; production
+    // wants exposure to be a deliberate act, not a default.
+    const config = loadConfiguration();
+    expect(config.metrics.enabled).toBe(true);
+    process.env.NODE_ENV = 'production';
+    // Production mode demands a real JWT secret (phase 3 §6), unrelated to the
+    // metrics default being exercised here.
+    process.env.JWT_SECRET = 'a'.repeat(64);
+    try {
+      expect(loadConfiguration().metrics.enabled).toBe(false);
+    } finally {
+      process.env.NODE_ENV = 'test';
+      delete process.env.JWT_SECRET;
+    }
+    process.env.METRICS_ENABLED = 'true';
+    expect(loadConfiguration().metrics.enabled).toBe(true);
+  });
+
+  it('defaults to /metrics on a dedicated worker port (D1/D3)', () => {
+    const config = loadConfiguration();
+    expect(config.metrics.path).toBe('/metrics');
+    expect(config.metrics.workerPort).toBe(9464);
+    expect(config.metrics.scrapeToken).toBeNull();
+  });
+
+  it('accepts an explicit enablement, path, token and worker port', () => {
+    const token = 't'.repeat(48);
+    process.env.METRICS_ENABLED = 'false';
+    process.env.METRICS_PATH = '/internal/metrics';
+    process.env.METRICS_SCRAPE_TOKEN = token;
+    process.env.WORKER_METRICS_PORT = '9999';
+
+    const config = loadConfiguration();
+    expect(config.metrics).toEqual({
+      enabled: false,
+      path: '/internal/metrics',
+      scrapeToken: token,
+      workerPort: 9999,
+    });
+  });
+
+  it('rejects a non-boolean METRICS_ENABLED at boot', () => {
+    process.env.METRICS_ENABLED = 'yes';
+    expect(() => loadConfiguration()).toThrow(/METRICS_ENABLED must be "true" or "false"/);
+  });
+
+  it.each([
+    'metrics',
+    '/metrics?debug=1',
+    '/metrics#top',
+    '/metrics path',
+    '',
+    '.metrics',
+  ])('rejects the invalid METRICS_PATH %p at boot', (value) => {
+    process.env.METRICS_PATH = value;
+    // An empty value falls back to the default (the established convention for
+    // every other path-like knob, e.g. CORS_ORIGINS), so it must not throw.
+    if (value === '') {
+      expect(loadConfiguration().metrics.path).toBe('/metrics');
+      return;
+    }
+    expect(() => loadConfiguration()).toThrow(/METRICS_PATH/);
+  });
+
+  it('refuses a path under the versioned contract, a health probe or Swagger', () => {
+    // §5/§6/§8: the exposition sits outside /api/v1 (contract, rate limits,
+    // request logs), must never shadow the health probes the platform probes,
+    // and must not take over the developer docs mount.
+    process.env.METRICS_PATH = '/api/v1/metrics';
+    expect(() => loadConfiguration()).toThrow(/must not live under \/api\/v1/);
+    process.env.METRICS_PATH = '/health/live';
+    expect(() => loadConfiguration()).toThrow(/must not shadow the health endpoints/);
+    process.env.METRICS_PATH = '/docs';
+    expect(() => loadConfiguration()).toThrow(/must not shadow the Swagger UI mount/);
+    process.env.SWAGGER_PATH = '/reference';
+    process.env.METRICS_PATH = '/reference/metrics';
+    expect(() => loadConfiguration()).toThrow(/must not shadow the Swagger UI mount/);
+  });
+
+  it('accepts the root-of-prefix path spelling that health uses', () => {
+    process.env.METRICS_PATH = '/';
+    expect(() => loadConfiguration()).toThrow(/must not be the root path/);
+  });
+
+  it('refuses a weak scrape token and never echoes it (D4(a), §7)', () => {
+    // A short token is brute-forceable across the internal network it is meant
+    // to complement, so boot rejects it — and the error names the variable and
+    // the floor but never the value, because a rejected secret in a boot log
+    // is a leaked secret.
+    process.env.METRICS_SCRAPE_TOKEN = 'short';
+    expect(() => loadConfiguration()).toThrow(/METRICS_SCRAPE_TOKEN must be at least 32 characters/);
+    try {
+      loadConfiguration();
+    } catch (error) {
+      expect((error as Error).message).not.toContain('short');
+    }
+  });
+
+  it('bounds the worker listener port and names the variable on failure', () => {
+    process.env.WORKER_METRICS_PORT = '0';
+    expect(() => loadConfiguration()).toThrow(/WORKER_METRICS_PORT must be an integer between 1 and 65535/);
+    process.env.WORKER_METRICS_PORT = '70000';
+    expect(() => loadConfiguration()).toThrow(/WORKER_METRICS_PORT/);
+    process.env.WORKER_METRICS_PORT = 'not-a-port';
+    expect(() => loadConfiguration()).toThrow(/WORKER_METRICS_PORT/);
+  });
+});

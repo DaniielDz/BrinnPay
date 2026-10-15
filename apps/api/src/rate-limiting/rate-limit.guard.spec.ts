@@ -88,7 +88,14 @@ describe('RateLimitGuard (phase 13 §4.3 stages 0-1)', () => {
   });
 
   it('never counts anything outside the API prefix (stage 0)', async () => {
-    for (const url of ['/health/live', '/health/ready', '/docs', '/docs/swagger-ui.css', '/']) {
+    for (const url of [
+      '/health/live',
+      '/health/ready',
+      '/docs',
+      '/docs/swagger-ui.css',
+      '/',
+      '/metrics',
+    ]) {
       const { context } = contextFor({ url });
       await expect(guardFor().canActivate(context)).resolves.toBe(true);
     }

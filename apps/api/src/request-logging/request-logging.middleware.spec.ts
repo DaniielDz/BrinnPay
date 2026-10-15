@@ -168,14 +168,21 @@ describe('RequestLoggingMiddleware (phase 11 §4.2/§5.2, D3/D7)', () => {
   });
 
   it('never attaches a listener — and never writes — outside the API prefix (D7)', () => {
-    for (const url of ['/health/live', '/health/ready', '/docs', '/', '/api/v10/customers']) {
+    for (const url of [
+      '/health/live',
+      '/health/ready',
+      '/docs',
+      '/',
+      '/api/v10/customers',
+      '/metrics',
+    ]) {
       const response = createResponse();
       middleware.use(createRequest({ originalUrl: url }) as never, response as never, next as never);
       expect(response.listenerCount('finish')).toBe(0);
       response.emit('finish');
     }
 
-    expect(next).toHaveBeenCalledTimes(5);
+    expect(next).toHaveBeenCalledTimes(6);
     expect(store.write).not.toHaveBeenCalled();
   });
 
