@@ -1,0 +1,15 @@
+# Grafana datasource provisioning (Phase 20 M3/AC3). The datasource UID is
+# `prometheus` — the committed dashboards reference it by that exact UID so a
+# clean checkout provisions end-to-end with no UI steps.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s

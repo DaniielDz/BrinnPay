@@ -1,0 +1,18 @@
+# BrinnPay Alertmanager (Phase 20 D6(a)) — notification target is the local
+# `alert-receiver` service (a zero-dependency node HTTP sink that prints
+# firing alerts as NDJSON to its container stdout). No email, no paging, no
+# SaaS: human routing is deliberately deferred to Phases 22/24 (ADR-0041).
+# No secrets here (§8 rule 8).
+
+route:
+  receiver: alert-receiver
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: alert-receiver
+    webhook_configs:
+      - url: http://alert-receiver:8080/alerts
+        send_resolved: true

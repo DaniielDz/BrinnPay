@@ -1,0 +1,14 @@
+# Grafana dashboard provisioning (Phase 20 M3/AC3): every committed JSON under
+# monitoring/grafana/dashboards/ is loaded automatically on startup.
+apiVersion: 1
+
+providers:
+  - name: brinnpay
+    orgId: 1
+    folder: BrinnPay
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
