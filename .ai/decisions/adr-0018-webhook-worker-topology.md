@@ -75,3 +75,24 @@ a default:
   fails fast. The failure mode that cannot be caught by configuration alone — a worker that never
   consumes — is covered by the delivery e2e test, which boots a real worker application context and
   asserts that a job actually leaves the queue.
+
+## Amendment — Phase 20 (2026-10-15, D3(a) / ADR-0040)
+
+Phase 20 D3(a) selected the **worker's own minimal metrics/health listener on a separate port**
+(default `9464`, `WORKER_METRICS_PORT`) as the export mechanism for M5 worker metrics. This amends
+this ADR's "No HTTP listener" posture as follows — and only as follows:
+
+- The worker serves exactly two routes on its own port: `/health/live` (compose healthcheck; it
+  answers even when exposition is disabled, D7(a)) and the Prometheus exposition path.
+- Still true, unchanged: no controllers, no Swagger, no readiness contract, no authentication
+  surface, no route guards, no `/api/v1` exposure, and no change to the application-context
+  composition root (`WebhooksWorkerModule`). The listener is closed by construction, not by
+  convention: it binds no router that could receive application traffic, and its port is not
+  published to the host — Prometheus and the healthcheck reach it over the compose network.
+- The alternative of exporting counters through Redis (keeping "serves no HTTP" literal) was
+  considered and rejected in §13 D3(b): it couples scrape freshness to Redis key design and adds
+  write work on the worker path.
+
+Rationale and consequences are recorded in **ADR-0040** (metrics architecture); this note exists
+because D3 required the posture amendment itself to be recorded here (§15), so a reader of the
+worker-topology decision sees the change without cross-referencing first.
