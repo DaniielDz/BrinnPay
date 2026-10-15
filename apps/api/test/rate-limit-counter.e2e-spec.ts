@@ -1,6 +1,7 @@
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
+import { MetricsService } from '../src/metrics/metrics.service';
 import type { RedisService } from '../src/redis/redis.service';
 import { deriveRateLimitKey, RateLimitCounterService } from '../src/rate-limiting/rate-limit-counter.service';
 import { requireDependencies } from './support/db-e2e';
@@ -47,6 +48,10 @@ describe('rate limit counter (Phase 13, real Redis)', () => {
       // suite independent of the API's own Redis provider lifecycle.
       { connection: client } as unknown as RedisService,
       { getOrThrow: () => failMode } as unknown as ConfigService,
+      // A real registry: the phase-13 §16 instrumentation is part of the
+      // counter's contract, and constructing it here exercises the wiring
+      // without asserting exposition format (covered by the unit suite).
+      new MetricsService(),
     );
   }
 

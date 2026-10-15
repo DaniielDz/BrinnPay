@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 
 import type { RateLimitFailMode } from '../config/configuration';
+import { MetricsService } from '../metrics/metrics.service';
 import { RedisService } from '../redis/redis.service';
 import type { RateLimitClass, RateLimitScope } from './rate-limit-classes';
 
@@ -132,6 +133,7 @@ export class RateLimitCounterService {
   constructor(
     private readonly redis: RedisService,
     config: ConfigService,
+    private readonly metrics: MetricsService,
   ) {
     this.failMode = config.getOrThrow<RateLimitFailMode>('rateLimit.failMode');
   }
@@ -140,6 +142,12 @@ export class RateLimitCounterService {
    * Consumes one unit of one bucket and reports the budget the caller should
    * surface. The same method serves the Redis-backed and both degraded paths, so
    * there is a single definition of "allowed" in the system.
+   *
+   * Also the handover point for the phase-13 §16 observability signals: this
+   * method is the only place that knows, for one attempt, the class, the scope
+   * and whether it was admitted, throttled or exhausted the window — so the
+   * throttled/exhaustion counters live here, not in a layer that would have to
+   * re-derive the outcome.
    */
   async consume(
     scope: RateLimitScope,
@@ -161,21 +169,57 @@ export class RateLimitCounterService {
         REDIS_COMMAND_TIMEOUT_MS,
       );
       const [count, ttl] = Array.isArray(raw) ? (raw as [number, number]) : [0, 0];
-      this.degraded = false;
-      return {
-        allowed: count <= limit,
-        remaining: Math.max(0, limit - count),
-        resetSeconds: Math.max(1, ttl),
-      };
+      if (this.degraded) {
+        // The first successful command after an episode: the gauge follows the
+        // service back to healthy (the episode counter keeps the history).
+        this.degraded = false;
+        this.metrics.setRateLimitDegraded(false);
+      }
+      return this.record(
+        routeClass,
+        scope,
+        {
+          allowed: count <= limit,
+          remaining: Math.max(0, limit - count),
+          resetSeconds: Math.max(1, ttl),
+        },
+      );
     } catch {
       this.warnOnce();
       return this.failMode === 'closed'
         ? // Fail-closed: enforcement is preferred over availability, so the
           // attempt is rejected with the configured budget and the full window
           // as the retry hint. Still a 429, never a 5xx (§8).
-          { allowed: false, remaining: 0, resetSeconds: windowSeconds }
-        : this.consumeInMemory(key, limit, windowSeconds);
+          this.record(
+            routeClass,
+            scope,
+            { allowed: false, remaining: 0, resetSeconds: windowSeconds },
+          )
+        : this.record(routeClass, scope, this.consumeInMemory(key, limit, windowSeconds));
     }
+  }
+
+  /**
+   * One throttled request per rejected attempt, one exhaustion per admission
+   * that used the last unit of its window (phase 13 §16). A throttle is not an
+   * exhaustion: the last admitted request of a window is the event that
+   * *starts* the silent period the alerting watches for.
+   */
+  private record(
+    routeClass: RateLimitClass,
+    scope: RateLimitScope,
+    consumption: BucketConsumption,
+  ): BucketConsumption {
+    try {
+      if (!consumption.allowed) {
+        this.metrics.incThrottledRequest(routeClass, scope);
+      } else if (consumption.remaining === 0) {
+        this.metrics.incRateLimitWindowExhaustion(routeClass, scope);
+      }
+    } catch {
+      // Instrumentation degrades observability, never enforcement (§4 rule 5).
+    }
+    return consumption;
   }
 
   /** One non-identifying warning per degradation episode, never per request. */
@@ -184,6 +228,11 @@ export class RateLimitCounterService {
       return;
     }
     this.degraded = true;
+    // Phase 13 §16: the gauge is state (0/1, set only on transitions) and the
+    // episode counter is history — together they distinguish "throttled a
+    // bit" from "limiter is flying blind".
+    this.metrics.setRateLimitDegraded(true);
+    this.metrics.incRateLimitDegradedEpisode();
     this.logger.warn(
       this.failMode === 'closed'
         ? 'Redis is unreachable; rate limiting is failing closed and rejecting requests with 429 (RATE_LIMIT_FAIL_MODE=closed).'

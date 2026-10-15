@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 
+import { WorkerMetricsService } from '../metrics/worker-metrics.service';
 import {
   REQUEST_LOG_CLEANUP_JOB,
   RequestLogStoreService,
@@ -34,6 +35,10 @@ import {
  * worker competing for the same jobs. There must be exactly **one** processor
  * for this queue name — a second one would split the delivery jobs between two
  * consumers and silently drop the passes the other one does not understand.
+ *
+ * Phase 20 §6 M5: also where each delivery attempt's outcome becomes a
+ * counter — the one boundary where a worker attempt is definitively resolved,
+ * so the shared delivery service stays free of process-specific concerns.
  */
 @Processor(WEBHOOK_QUEUE_NAME)
 export class WebhookProcessor extends WorkerHost {
@@ -43,6 +48,7 @@ export class WebhookProcessor extends WorkerHost {
     private readonly delivery: WebhookDeliveryService,
     private readonly maintenance: WebhookMaintenanceService,
     private readonly requestLogs: RequestLogStoreService,
+    private readonly workerMetrics: WorkerMetricsService,
   ) {
     super();
   }
@@ -71,9 +77,12 @@ export class WebhookProcessor extends WorkerHost {
     const deliveryId = data?.delivery_id;
     if (typeof deliveryId !== 'string' || deliveryId.length === 0) {
       this.logger.warn('Discarding a delivery job without a delivery id.');
+      this.workerMetrics.incDeliveryAttempt('skipped');
       return 'skipped';
     }
-    return this.delivery.attempt(deliveryId);
+    const outcome = await this.delivery.attempt(deliveryId);
+    this.workerMetrics.incDeliveryAttempt(outcome);
+    return outcome;
   }
 
   /**

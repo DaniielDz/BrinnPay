@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
+import type { SweepPass } from '../metrics/metrics.service';
+import { WorkerMetricsService } from '../metrics/worker-metrics.service';
 import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WebhookEventService } from './webhook-event.service';
@@ -55,6 +57,7 @@ export class WebhookMaintenanceService {
     private readonly queue: WebhookQueueService,
     private readonly payments: PaymentsService,
     @Inject(WEBHOOK_DELIVERY_POLICY) private readonly policy: WebhookDeliveryPolicy,
+    private readonly workerMetrics: WorkerMetricsService,
   ) {}
 
   /**
@@ -65,10 +68,15 @@ export class WebhookMaintenanceService {
    * the pass actually repaired something, carrying the window bounds so a
    * surprising `created: 0` is diagnosable. Never a URL, a credential, or a
    * response body.
+   *
+   * Phase 20 §6 M5: each half of the pass is timed under its own label
+   * (`reconciliation` creates the missing deliveries, `requeue` re-queues the
+   * stranded ones) — the alerting ladder watches how long repair itself takes,
+   * and one blended duration would hide which half is growing.
    */
   async reconcile(): Promise<{ created: number; requeued: number }> {
-    const created = await this.events.reconcile();
-    const requeued = await this.events.requeueDueDeliveries();
+    const created = await this.timed('reconciliation', () => this.events.reconcile());
+    const requeued = await this.timed('requeue', () => this.events.requeueDueDeliveries());
     if (created > 0 || requeued > 0) {
       this.logger.log(
         {
@@ -89,15 +97,17 @@ export class WebhookMaintenanceService {
    * swallowed — the payment itself is unaffected, and the next pass retries.
    */
   async advancePayments(): Promise<number> {
-    try {
-      return await this.payments.advanceDuePayments(new Date());
-    } catch (error) {
-      this.logger.warn(
-        { reason: messageOf(error) },
-        'Payment advancement sweep failed; the next pass retries.',
-      );
-      return 0;
-    }
+    return this.timed('advancement', async () => {
+      try {
+        return await this.payments.advanceDuePayments(new Date());
+      } catch (error) {
+        this.logger.warn(
+          { reason: messageOf(error) },
+          'Payment advancement sweep failed; the next pass retries.',
+        );
+        return 0;
+      }
+    });
   }
 
   /**
@@ -120,6 +130,10 @@ export class WebhookMaintenanceService {
    * the next pass resumes from the cutoff.
    */
   async cleanupExpired(now: Date = new Date()): Promise<number> {
+    return this.timed('retention', () => this.runRetentionPass(now));
+  }
+
+  private async runRetentionPass(now: Date): Promise<number> {
     const cutoff = new Date(now.getTime() - this.policy.eventRetentionMs);
     let removed = 0;
     for (let page = 0; page < CLEANUP_MAX_PAGES; page += 1) {
@@ -157,6 +171,25 @@ export class WebhookMaintenanceService {
       this.logger.log({ removed, cutoff: cutoff.toISOString() }, 'Expired events removed.');
     }
     return removed;
+  }
+
+  /**
+   * Phase 20 §6 M5: time one sweep pass and stamp it as observed. `finally`,
+   * so a pass that throws is still recorded as having run — a sweep that dies
+   * early must show up as a short duration, not as a stale timestamp.
+   */
+  private async timed<T>(pass: SweepPass, operation: () => Promise<T>): Promise<T> {
+    const startedAt = performance.now();
+    try {
+      return await operation();
+    } finally {
+      try {
+        this.workerMetrics.observeSweep(pass, performance.now() - startedAt);
+      } catch {
+        // Instrumentation degrades observability, never the sweep's
+        // never-throws contract (§4 rule 5).
+      }
+    }
   }
 
   /** Registered once at worker boot so the schedule survives a restart. */

@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { ConfigService } from '@nestjs/config';
 import { Queue, type JobsOptions } from 'bullmq';
 
+import type { QueueState } from '../metrics/metrics.service';
 import {
   deliverJobId,
   WEBHOOK_JOBS,
@@ -217,6 +218,27 @@ export class WebhookQueueService implements OnModuleInit, OnModuleDestroy {
         { job: name, reason: messageOf(error) },
         'Could not register a scheduled webhook job; the worker will retry on restart.',
       );
+    }
+  }
+
+  /**
+   * Phase 20 §6 M5: the four watched states of the delivery queue in one round
+   * trip. Read-only and total-failure-safe (never throws): this feeds a scrape
+   * and a queue-lag alert, not a business decision, so a Redis outage reports
+   * zeros rather than breaking the exposition — the degraded state is itself
+   * visible through the limiter's own gauge.
+   */
+  async jobCounts(): Promise<Record<QueueState, number>> {
+    try {
+      const counts = await this.queue.getJobCounts('wait', 'delayed', 'active', 'failed');
+      return {
+        wait: counts.wait ?? 0,
+        delayed: counts.delayed ?? 0,
+        active: counts.active ?? 0,
+        failed: counts.failed ?? 0,
+      };
+    } catch {
+      return { wait: 0, delayed: 0, active: 0, failed: 0 };
     }
   }
 

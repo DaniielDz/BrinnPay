@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestLogRecord } from './request-log-record';
 
@@ -66,6 +67,7 @@ export class RequestLogStoreService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(REQUEST_LOG_RETENTION_POLICY) private readonly policy: RequestLogRetentionPolicy,
+    private readonly metrics: MetricsService,
   ) {}
 
   /**
@@ -74,8 +76,14 @@ export class RequestLogStoreService {
    * The mapping below is the second half of the §4.2 rule 4 allowlist: only the
    * columns named here exist, so a future field added to `RequestLogRecord`
    * does not reach the database until it is deliberately mapped.
+   *
+   * Phase 20 §6 M4/§10: each attempt is counted — the write rate is the
+   * ingestion-rate proxy (ADR-0039 PR-3), and the failure counter is the
+   * "logs are silently disappearing" alarm. Counting is swallowed on defect:
+   * this method's contract is that it never throws.
    */
   async write(record: RequestLogRecord): Promise<void> {
+    this.countWriteOutcome(true);
     try {
       await this.prisma.requestLog.create({
         data: {
@@ -94,6 +102,7 @@ export class RequestLogStoreService {
         },
       });
     } catch (error) {
+      this.countWriteOutcome(false);
       // §8: the request id and the error *class* only — never the message
       // (Prisma frames and validation messages can echo values), never the
       // record payload, never a header, never a query string.
@@ -101,6 +110,19 @@ export class RequestLogStoreService {
         { request_id: record.request_id, reason: errorClassOf(error) },
         'Failed to persist a request log record; the record is dropped.',
       );
+    }
+  }
+
+  /** Counting must never turn a dropped log into a thrown write (D3, §4 rule 5). */
+  private countWriteOutcome(attempt: boolean): void {
+    try {
+      if (attempt) {
+        this.metrics.incRequestLogWrite();
+      } else {
+        this.metrics.incRequestLogWriteFailure();
+      }
+    } catch {
+      // Instrumentation degrades observability, never durability semantics.
     }
   }
 

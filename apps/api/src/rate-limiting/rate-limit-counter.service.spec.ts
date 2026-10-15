@@ -2,30 +2,45 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { RedisService } from '../redis/redis.service';
+import type { MetricsService } from '../metrics/metrics.service';
 import type { RateLimitFailMode } from '../config/configuration';
 import type { RateLimitClass } from './rate-limit-classes';
 import { deriveRateLimitKey, RateLimitCounterService } from './rate-limit-counter.service';
 
 /**
  * The accounting half (phase 13 §4.2 rules 3–5, D2/D8): one atomic round trip,
- * opaque keys, self-expiring windows, and both failure postures.
+ * opaque keys, self-expiring windows and both failure postures — plus the
+ * phase-13 §16 observability handover (throttled/exhaustion/degraded).
  */
 describe('RateLimitCounterService (phase 13 §4.2)', () => {
   let evalMock: jest.Mock;
   let redis: { connection: { eval: jest.Mock } };
   let warn: jest.SpyInstance;
+  let metrics: {
+    incThrottledRequest: jest.Mock;
+    incRateLimitWindowExhaustion: jest.Mock;
+    setRateLimitDegraded: jest.Mock;
+    incRateLimitDegradedEpisode: jest.Mock;
+  };
 
   function counterFor(failMode: RateLimitFailMode = 'open'): RateLimitCounterService {
     const config = { getOrThrow: jest.fn().mockReturnValue(failMode) };
     return new RateLimitCounterService(
       redis as unknown as RedisService,
       config as unknown as ConfigService,
+      metrics as unknown as MetricsService,
     );
   }
 
   beforeEach(() => {
     evalMock = jest.fn();
     redis = { connection: { eval: evalMock } };
+    metrics = {
+      incThrottledRequest: jest.fn(),
+      incRateLimitWindowExhaustion: jest.fn(),
+      setRateLimitDegraded: jest.fn(),
+      incRateLimitDegradedEpisode: jest.fn(),
+    };
     // The degradation warning is the observable the posture tests assert on, and
     // it must be asserted without going through the global logging pipeline.
     warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -253,6 +268,69 @@ describe('RateLimitCounterService (phase 13 §4.2)', () => {
         allowed: true,
         remaining: 9,
       });
+    });
+  });
+
+  describe('observability handover (phase 13 §16)', () => {
+    it('counts a rejected attempt as throttled, with its class and scope', async () => {
+      evalMock.mockResolvedValue([11, 60]); // count above the limit
+      const service = counterFor();
+
+      await service.consume('account', 'acct_1', 'write', 10, 60);
+
+      expect(metrics.incThrottledRequest).toHaveBeenCalledWith('write', 'account');
+      expect(metrics.incRateLimitWindowExhaustion).not.toHaveBeenCalled();
+    });
+
+    it('counts the admission that exhausts the window, not the throttles after it', async () => {
+      evalMock.mockResolvedValue([10, 60]); // exactly the limit: last unit consumed
+      const service = counterFor();
+
+      await service.consume('ip', '203.0.113.7', 'read', 10, 60);
+
+      expect(metrics.incRateLimitWindowExhaustion).toHaveBeenCalledWith('read', 'ip');
+      expect(metrics.incThrottledRequest).not.toHaveBeenCalled();
+    });
+
+    it('sets the degraded gauge and bumps the episode counter once per episode', async () => {
+      evalMock.mockRejectedValue(new Error('down'));
+      const service = counterFor('closed');
+
+      await consume(service);
+      await consume(service);
+
+      expect(metrics.setRateLimitDegraded).toHaveBeenCalledTimes(1);
+      expect(metrics.setRateLimitDegraded).toHaveBeenCalledWith(true);
+      expect(metrics.incRateLimitDegradedEpisode).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears the gauge on the first success after an episode', async () => {
+      evalMock.mockRejectedValue(new Error('down'));
+      const service = counterFor();
+      await consume(service);
+
+      evalMock.mockResolvedValue([1, 60]);
+      await consume(service);
+
+      expect(metrics.setRateLimitDegraded).toHaveBeenLastCalledWith(false);
+    });
+
+    it('never lets a metrics defect turn enforcement into a failure (§4 rule 5)', async () => {
+      metrics.incThrottledRequest.mockImplementation(() => {
+        throw new Error('metrics down');
+      });
+      metrics.incRateLimitWindowExhaustion.mockImplementation(() => {
+        throw new Error('metrics down');
+      });
+      const service = counterFor();
+
+      await expect(
+        service.consume('account', 'acct_1', 'write', 10, 60),
+      ).resolves.toMatchObject({ allowed: true });
+      evalMock.mockResolvedValue([11, 60]);
+      await expect(
+        service.consume('account', 'acct_1', 'write', 10, 60),
+      ).resolves.toMatchObject({ allowed: false });
     });
   });
 });
