@@ -317,13 +317,13 @@
 
 **Goal:** Systematic security review and hardening.
 
-- [ ] Authorization review (IDOR prevention)
-- [ ] Tenant isolation verification
-- [ ] API security (injection, XSS)
-- [ ] Web application security review
-- [ ] Session and authentication review
-- [ ] Secrets management review
-- [ ] OWASP Top 10 checklist
+- [x] Authorization review (IDOR prevention)
+- [x] Tenant isolation verification
+- [x] API security (injection, XSS)
+- [x] Web application security review
+- [x] Session and authentication review
+- [x] Secrets management review
+- [x] OWASP Top 10 checklist
 
 ---
 
@@ -407,10 +407,10 @@
 
 **Goal:** Prepare the repository for public consumption.
 
-- [ ] README
-- [ ] CONTRIBUTING guide
+- [x] README
+- [x] CONTRIBUTING guide
 - [ ] SECURITY policy
-- [ ] LICENSE
+- [x] LICENSE
 - [ ] Issue templates
 - [ ] PR template
 - [ ] Architecture documentation

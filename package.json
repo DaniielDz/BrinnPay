@@ -1,7 +1,7 @@
 {
   "name": "brinnpay",
   "version": "0.1.0",
-  "description": "",
+  "description": "Sandbox de infraestructura de pagos para desarrolladores (API REST + dashboard)",
   "main": "index.js",
   "scripts": {
     "lint": "pnpm -r lint && pnpm lint:openapi",
@@ -17,8 +17,8 @@
     "loadtest:inspect": "node loadtest/scripts/inspect.mjs"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Daniel Diaz",
+  "license": "MIT",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
