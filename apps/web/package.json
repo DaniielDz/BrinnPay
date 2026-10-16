@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "BrinnPay web application — public site and developer dashboard (Next.js).",
-  "license": "ISC",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev --port 3001",
     "build": "next build",

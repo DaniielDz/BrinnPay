@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "BrinnPay k6 load-testing harness (phase 19) — scenarios, seeding, receiver, runner. Local-only by design.",
-  "license": "ISC",
+  "license": "MIT",
   "scripts": {
     "lint": "eslint \"scenarios/**/*.ts\" \"lib/**/*.ts\" \"scripts/**/*.mjs\" \"test/**/*.mjs\"",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",

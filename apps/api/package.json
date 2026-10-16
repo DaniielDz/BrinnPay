@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "BrinnPay API — NestJS backend (modular monolith).",
-  "license": "ISC",
+  "license": "MIT",
   "scripts": {
     "dev": "nest start --watch",
     "start": "node dist/main.js",
