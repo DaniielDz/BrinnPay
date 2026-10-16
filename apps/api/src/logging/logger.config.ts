@@ -86,10 +86,17 @@ type LogRequest = IncomingMessage;
  * Structured JSON logging with request IDs and redaction (D3). Uses
  * `pino-pretty` only for readable local development output; production and
  * test environments emit JSON.
+ *
+ * `metricsPath` (phase 20 §8) silences the auto-logged line for scrapes of the
+ * exposition endpoint — a scrape every 15 s is machine traffic, not an
+ * application event. Passed only while the endpoint is exposed, so a disabled
+ * endpoint keeps its ordinary 404 line. The health paths stay exact-match,
+ * as they have been since phase 2.
  */
 export function buildLoggerOptions(
-  config: Pick<BrinnPayConfig, 'logLevel' | 'nodeEnv'>,
+  config: Pick<BrinnPayConfig, 'logLevel' | 'nodeEnv'> & { metricsPath?: string },
 ): Params {
+  const metricsPath = config.metricsPath;
   return {
     pinoHttp: {
       level: config.logLevel,
@@ -113,8 +120,18 @@ export function buildLoggerOptions(
         }),
       },
       autoLogging: {
-        ignore: (request) =>
-          request.url === '/health/live' || request.url === '/health/ready',
+        ignore: (request) => {
+          if (request.url === '/health/live' || request.url === '/health/ready') {
+            return true;
+          }
+          if (metricsPath === undefined) {
+            return false;
+          }
+          // Same path semantics as the endpoint itself: the query string is
+          // not part of the path.
+          const requestPath = (request.url ?? '').split('?', 1)[0];
+          return requestPath === metricsPath;
+        },
       },
       ...(config.nodeEnv === 'development'
         ? {

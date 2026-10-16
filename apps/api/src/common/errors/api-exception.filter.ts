@@ -8,7 +8,13 @@ import {
 import type { Request, Response } from 'express';
 import { Logger } from 'nestjs-pino';
 
+import { routeTemplateOf } from '../../metrics/http-metrics';
+import { MetricsService } from '../../metrics/metrics.service';
 import { resolveRequestId } from '../../request-id/request-id';
+import {
+  isUnderApiPrefix,
+  requestPathOf,
+} from '../../request-logging/request-log-record';
 import { ApiError } from './api-error';
 import { ErrorCode } from './error-code';
 
@@ -36,10 +42,19 @@ interface ErrorEnvelope {
  * §7.6). Never leaks stack traces, database details, connection strings, or
  * secrets; unexpected errors are logged server-side and returned as a generic
  * 500.
+ *
+ * Phase 20 §6 M4/§10: also the boundary that *knows* an exception was not an
+ * `HttpException` — the definition of unhandled — so the
+ * `http_unhandled_exceptions_total` counter is raised here rather than
+ * anywhere that would have to re-classify the error later. Only `/api/v1`
+ * traffic counts, by the same predicate as the rest of the request surface.
  */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
-  constructor(private readonly logger: Logger) {}
+  constructor(
+    private readonly logger: Logger,
+    private readonly metrics: MetricsService,
+  ) {}
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const context = host.switchToHttp();
@@ -49,8 +64,24 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     const envelope = this.toEnvelope(exception, requestId);
 
+    if (!(exception instanceof HttpException)) {
+      this.countUnhandled(request);
+    }
+
     response.setHeader('X-Request-Id', requestId);
     response.status(this.statusFor(exception)).json(envelope);
+  }
+
+  /** §4 rule 5: a metric defect must never replace the error envelope. */
+  private countUnhandled(request: Request): void {
+    try {
+      if (!isUnderApiPrefix(requestPathOf(request.originalUrl ?? request.url ?? ''))) {
+        return;
+      }
+      this.metrics.incUnhandledException(routeTemplateOf(request));
+    } catch {
+      // Instrumentation degrades observability, never the error contract.
+    }
   }
 
   private toEnvelope(exception: unknown, requestId: string): ErrorEnvelope {

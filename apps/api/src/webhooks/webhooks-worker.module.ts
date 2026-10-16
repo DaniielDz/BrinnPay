@@ -6,6 +6,9 @@ import { LoggerModule } from 'nestjs-pino';
 import { AuthModule } from '../auth/auth.module';
 import loadConfiguration from '../config/configuration';
 import { buildLoggerOptions } from '../logging/logger.config';
+import { MetricsModule } from '../metrics/metrics.module';
+import { WorkerHttpListener } from '../metrics/worker-http.listener';
+import { WorkerMetricsService } from '../metrics/worker-metrics.service';
 import { PaymentsModule } from '../payments/payments.module';
 import { RedisModule } from '../redis/redis.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -114,8 +117,24 @@ import { WebhooksCoreModule } from './webhooks-core.module';
     // enough — a worker never serves HTTP, so the capture middleware and the
     // read controller stay out of this graph.
     RequestLoggingCoreModule,
+    // Phase 20: the worker's registry. Global, so the shared modules that
+    // instrument themselves (the request-log store, the queue producer) resolve
+    // it without every core module re-declaring the dependency.
+    MetricsModule,
   ],
-  providers: [WebhookProcessor, WebhookMaintenanceService],
+  providers: [
+    WebhookProcessor,
+    WebhookMaintenanceService,
+    // Worker-only instrumentation (§6 M5): the M5 gauges live on the worker's
+    // registry, not the API's, so each process's exposition stays true to the
+    // signals it can actually produce (D3/§16).
+    WorkerMetricsService,
+    // Deliberately **not** started here: the three e2e suites boot this module
+    // in-process, and a lifecycle hook binding the configured port would make
+    // them collide (and bind a real port during unit runs). `worker.ts` starts
+    // and stops it explicitly, where process ownership is unambiguous.
+    WorkerHttpListener,
+  ],
 })
 export class WebhooksWorkerModule implements OnApplicationBootstrap {
   private readonly logger = new Logger(WebhooksWorkerModule.name);

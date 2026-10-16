@@ -12,6 +12,7 @@ import loadConfiguration from './config/configuration';
 import { HealthModule } from './health/health.module';
 import { IdempotencyModule } from './idempotency/idempotency.module';
 import { buildLoggerOptions } from './logging/logger.config';
+import { MetricsModule } from './metrics/metrics.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -49,8 +50,14 @@ import { WebhooksModule } from './webhooks/webhooks.module';
         buildLoggerOptions({
           logLevel: config.get<string>('logLevel') ?? 'info',
           nodeEnv: config.get<string>('nodeEnv') ?? 'development',
+          // Phase 20 §5/§8: scrapes of the exposition endpoint are noise, not
+          // traffic; ignored only while the endpoint is actually exposed.
+          metricsPath: config.getOrThrow<{ enabled: boolean; path: string }>('metrics').enabled
+            ? config.getOrThrow<{ path: string }>('metrics').path
+            : undefined,
         }),
     }),
+    MetricsModule,
     PrismaModule,
     RedisModule,
     IdempotencyModule,

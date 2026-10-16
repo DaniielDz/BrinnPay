@@ -8,6 +8,7 @@ import {
 import type { ArgumentsHost } from '@nestjs/common';
 import type { Logger } from 'nestjs-pino';
 
+import type { MetricsService } from '../../metrics/metrics.service';
 import { ApiError } from './api-error';
 import { ApiExceptionFilter } from './api-exception.filter';
 import { ErrorCode } from './error-code';
@@ -18,7 +19,10 @@ interface MockResponse {
   json: jest.Mock;
 }
 
-function createHost(requestId: string): { host: ArgumentsHost; response: MockResponse } {
+function createHost(
+  requestId: string,
+  request: Record<string, unknown> = {},
+): { host: ArgumentsHost; response: MockResponse } {
   const response: MockResponse = {
     setHeader: jest.fn(),
     status: jest.fn().mockReturnThis(),
@@ -27,7 +31,7 @@ function createHost(requestId: string): { host: ArgumentsHost; response: MockRes
 
   const host = {
     switchToHttp: () => ({
-      getRequest: () => ({ id: requestId }),
+      getRequest: () => ({ id: requestId, ...request }),
       getResponse: () => response,
     }),
   } as unknown as ArgumentsHost;
@@ -37,6 +41,7 @@ function createHost(requestId: string): { host: ArgumentsHost; response: MockRes
 
 describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
   const logger = { error: jest.fn(), warn: jest.fn() } as unknown as Logger;
+  const metrics: { incUnhandledException: jest.Mock } = { incUnhandledException: jest.fn() };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -44,7 +49,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('renders ApiError with its code, message, request_id and details', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(
       new ApiError(ErrorCode.CONFLICT, 'Already exists', HttpStatus.CONFLICT, { field: 'x' }),
@@ -65,7 +70,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('maps common HttpExceptions to canonical codes', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(new NotFoundException('Missing something'), host);
 
@@ -81,7 +86,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('maps BadRequestException to VALIDATION_ERROR', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(new BadRequestException('Bad input'), host);
 
@@ -95,7 +100,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('maps ForbiddenException to FORBIDDEN and includes the request ID', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(new ForbiddenException('Not allowed'), host);
 
@@ -111,7 +116,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('never leaks internals for 5xx HttpExceptions', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(new HttpException('database pool exhausted at postgres://internal', 500), host);
 
@@ -127,7 +132,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('logs unexpected errors server-side and returns a generic envelope', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(new Error('boom: postgresql://user:password@db:5432/brinnpay'), host);
 
@@ -147,7 +152,7 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
 
   it('extracts array validation messages from HttpException responses', () => {
     const { host, response } = createHost('req_abc');
-    const filter = new ApiExceptionFilter(logger);
+    const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
 
     filter.catch(new BadRequestException(['first problem', 'second problem']), host);
 
@@ -156,5 +161,60 @@ describe('ApiExceptionFilter (phase 2 §4.2, phase 1 §7.6)', () => {
         error: expect.objectContaining({ message: 'first problem; second problem' }),
       }),
     );
+  });
+
+  describe('unhandled-exception counter (phase 20 §6 M4/§10)', () => {
+    it('counts a non-HttpException on /api/v1 by route template', () => {
+      const { host } = createHost('req_abc', {
+        originalUrl: '/api/v1/customers/cus_1?expand=all',
+        route: { path: '/customers/:customerId' },
+        baseUrl: '/api/v1',
+      });
+      const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
+
+      filter.catch(new Error('boom'), host);
+
+      expect(metrics.incUnhandledException).toHaveBeenCalledWith('/customers/:customerId');
+    });
+
+    it('counts an unmatched /api/v1 path under the single unmatched series', () => {
+      const { host } = createHost('req_abc', {
+        originalUrl: '/api/v1/no-such-route',
+      });
+      const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
+
+      filter.catch(new Error('boom'), host);
+
+      expect(metrics.incUnhandledException).toHaveBeenCalledWith('unmatched');
+    });
+
+    it('does not count HttpExceptions — handled statuses are not "unhandled"', () => {
+      const { host } = createHost('req_abc', { originalUrl: '/api/v1/customers' });
+      const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
+
+      filter.catch(new NotFoundException(), host);
+
+      expect(metrics.incUnhandledException).not.toHaveBeenCalled();
+    });
+
+    it('does not count errors outside /api/v1 (health probes, Swagger, metrics)', () => {
+      const { host } = createHost('req_abc', { originalUrl: '/health/live' });
+      const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
+
+      filter.catch(new Error('boom'), host);
+
+      expect(metrics.incUnhandledException).not.toHaveBeenCalled();
+    });
+
+    it('still renders the envelope when the counter itself throws (§4 rule 5)', () => {
+      metrics.incUnhandledException.mockImplementationOnce(() => {
+        throw new Error('registry broken');
+      });
+      const { host, response } = createHost('req_abc', { originalUrl: '/api/v1/customers' });
+      const filter = new ApiExceptionFilter(logger, metrics as unknown as MetricsService);
+
+      expect(() => filter.catch(new Error('boom'), host)).not.toThrow();
+      expect(response.json).toHaveBeenCalled();
+    });
   });
 });

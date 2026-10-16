@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 
+import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestLogRecord } from './request-log-record';
 import {
@@ -59,6 +60,7 @@ describe('request-log retention policy (phase 11 D5)', () => {
 describe('RequestLogStoreService', () => {
   let service: RequestLogStoreService;
   let prisma: { requestLog: { create: jest.Mock; findMany: jest.Mock; deleteMany: jest.Mock } };
+  let metrics: { incRequestLogWrite: jest.Mock; incRequestLogWriteFailure: jest.Mock };
   let logError: jest.Mock;
   let logWarn: jest.Mock;
 
@@ -70,11 +72,13 @@ describe('RequestLogStoreService', () => {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
     };
+    metrics = { incRequestLogWrite: jest.fn(), incRequestLogWriteFailure: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         RequestLogStoreService,
         { provide: PrismaService, useValue: prisma },
+        { provide: MetricsService, useValue: metrics },
         {
           provide: REQUEST_LOG_RETENTION_POLICY,
           useValue: { retentionMs: RETENTION_MS, cleanupIntervalMs: 3_600_000 },
@@ -156,6 +160,17 @@ describe('RequestLogStoreService', () => {
       expect(logged).not.toContain('SECRET-ROUTE');
       expect(logged).not.toContain(payload.project_id);
       expect(logged).not.toContain(payload.id);
+    });
+
+    it('counts every attempt, and a dropped record as a failure (phase 20 §6 M4)', async () => {
+      // The write rate is the ingestion-rate proxy (ADR-0039 PR-3) and the
+      // failure counter is the "logs are silently disappearing" alarm.
+      await service.write(record());
+      prisma.requestLog.create.mockRejectedValueOnce(new Error('down'));
+      await service.write(record());
+
+      expect(metrics.incRequestLogWrite).toHaveBeenCalledTimes(2);
+      expect(metrics.incRequestLogWriteFailure).toHaveBeenCalledTimes(1);
     });
   });
 

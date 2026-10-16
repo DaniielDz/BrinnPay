@@ -1,0 +1,80 @@
+# BrinnPay alert rules (Phase 20 D6(a)) — exactly the four committed rules:
+#   BrinnPayApiErrorRateHigh, BrinnPayRateLimitDegraded,
+#   BrinnPayDeliveryQueueLag, BrinnPayRequestLogWriteAnomaly.
+#
+# Thresholds are **operational guardrails derived from the local Phase 19
+# baseline** (`docs/performance-baseline.md`), not SLOs (§4 rule 8, F10, Q6).
+# The baseline recorded a 0 contract-level error rate in every scenario, so
+# any sustained 5xx share is anomalous; the 2% band is a deliberately loose
+# sandbox guardrail, not a product target. Human routing is deferred
+# (ADR-0041); the Alertmanager target is the local `alert-receiver`.
+
+groups:
+  - name: brinnpay
+    rules:
+      # AC4 / M4: sustained 5xx share over all API traffic. Route labels are
+      # templates, never raw URLs (D5).
+      - alert: BrinnPayApiErrorRateHigh
+        expr: |
+          sum(rate(brinnpay_http_requests_total{status_class="5xx",plane="api"}[5m]))
+          /
+          sum(rate(brinnpay_http_requests_total{plane="api"}[5m]))
+          > 0.02
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx error rate above the 2% operational guardrail"
+          description: >-
+            The 5xx share of API requests has exceeded 2% for 5 minutes.
+            Investigate via structured request-ID logs and request logs
+            (correlation path, ADR-0041 §Correlation). Baseline reference:
+            docs/performance-baseline.md (0% contract-level errors).
+
+      # Phase 13 §16 handover: the degraded-mode fallback engaged.
+      - alert: BrinnPayRateLimitDegraded
+        expr: brinnpay_rate_limit_degraded > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limiter is in degraded mode"
+          description: >-
+            The limiter has been serving degraded-mode responses (fail-open /
+            open posture) for 2 minutes. Check Redis reachability and the
+            limiter logs; a degraded limiter means traffic is not being
+            throttled as designed (ADR-0024).
+
+      # ADR-0039 PR-2/PR-5 trigger: oldest pending delivery aging past the
+      # attempt-ladder horizon (5 attempts; ladder spans minutes — 30 min is
+      # the committed guardrail for "persisting beyond the ladder").
+      - alert: BrinnPayDeliveryQueueLag
+        expr: brinnpay_delivery_oldest_pending_age_seconds > 1800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest pending webhook delivery older than 30 minutes"
+          description: >-
+            At least one pending delivery has aged beyond 1800s for 10
+            minutes. This is the ADR-0039 PR-2/PR-5 reopen signal — deliveries
+            are not draining within the ladder horizon. Check the worker
+            process, queue depth, and delivery destination health.
+
+      # ADR-0039 PR-3 trigger: anomalous request-log write rate in normal
+      # operation. Baseline: ~171 req/s amplified 404 scanning produced
+      # ≈ 24k rows/min; 100 writes/s sustained is the committed guardrail for
+      # "anomalous in normal operation" (not scan traffic).
+      - alert: BrinnPayRequestLogWriteAnomaly
+        expr: sum(rate(brinnpay_request_log_writes_total[10m])) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Request-log write rate anomalous for normal operation"
+          description: >-
+            The request-log store has accepted more than 100 writes/s for 10
+            minutes. Sustained scanning (ADR-0039 PR-3 shape) produces this
+            pattern. Investigate traffic source and route templates driving
+            the writes; the write-failure counter is the paired failure
+            signal.

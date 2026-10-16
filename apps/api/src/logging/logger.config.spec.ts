@@ -158,7 +158,7 @@ describe('buildLoggerOptions (D3)', () => {
   const testConfig = { nodeEnv: 'test', logLevel: 'info' };
 
   function pinoHttpOptions(
-    config: { nodeEnv: string; logLevel: string } = testConfig,
+    config: { nodeEnv: string; logLevel: string; metricsPath?: string } = testConfig,
   ): PinoHttpOptions {
     const { pinoHttp } = buildLoggerOptions(config);
     return pinoHttp as PinoHttpOptions;
@@ -205,6 +205,28 @@ describe('buildLoggerOptions (D3)', () => {
     expect(ignore({ url: '/health/live' })).toBe(true);
     expect(ignore({ url: '/health/ready' })).toBe(true);
     expect(ignore({ url: '/api/v1/anything' })).toBe(false);
+  });
+
+  it('also skips scrapes of the metrics exposition while it is exposed (phase 20 §8)', () => {
+    // A 15-second scrape is machine traffic, not an application event; but the
+    // silence follows the endpoint's own enable flag — a disabled endpoint
+    // keeps its ordinary 404 line.
+    const options = pinoHttpOptions({ metricsPath: '/metrics', nodeEnv: 'test', logLevel: 'info' });
+    const autoLogging = options.autoLogging as AutoLoggingOptions<TestRequest>;
+    const ignore = autoLogging.ignore as (request: TestRequest) => boolean;
+
+    expect(ignore({ url: '/metrics' })).toBe(true);
+    expect(ignore({ url: '/metrics?g=0' })).toBe(true);
+    expect(ignore({ url: '/metrics-backup' })).toBe(false);
+    expect(ignore({ url: '/health/live' })).toBe(true);
+    expect(ignore({ url: '/api/v1/anything' })).toBe(false);
+
+    const withoutMetrics = pinoHttpOptions();
+    const ignoreWithout =
+      (withoutMetrics.autoLogging as AutoLoggingOptions<TestRequest>).ignore as (
+        request: TestRequest,
+      ) => boolean;
+    expect(ignoreWithout({ url: '/metrics' })).toBe(false);
   });
 
   it('uses pino-pretty only in development', () => {

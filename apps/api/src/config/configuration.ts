@@ -146,6 +146,35 @@ export interface BrinnPayConfig {
     /** CIDR allowlist of proxies whose forwarded headers may be honored. */
     trustedProxyCidrs: readonly string[];
   };
+  /**
+   * Observability surface (phase 20 D1/D3/D4). Non-secret operational
+   * configuration: collection runs in-process regardless, the flag governs the
+   * *exposition endpoint* (D4(a)), and the optional token is the scrape
+   * credential Prometheus presents. Never logged, never echoed in an error.
+   */
+  metrics: {
+    /**
+     * Whether the exposition endpoint answers (`D4(a)`'s enable flag). Defaults
+     * to on outside production so local scraping works with no setup, and off
+     * in production so a deployment exposes it only deliberately (the Phase
+     * 21/24 firewall obligation applies either way).
+     */
+    enabled: boolean;
+    /** Path of the exposition endpoint on both processes (API + worker). */
+    path: string;
+    /**
+     * Optional bearer token for scrapes (`null` = network-trust only). When
+     * set, a scrape must present `Authorization: Bearer <token>`; validated at
+     * boot so a too-weak token fails fast, like `JWT_SECRET`.
+     */
+    scrapeToken: string | null;
+    /**
+     * Port of the worker's own metrics/health listener (D3(a)). The worker
+     * serves `/health/live` here even when exposition is disabled, so the
+     * compose healthcheck never depends on the metrics flag (D7).
+     */
+    workerPort: number;
+  };
 }
 
 export type RateLimitFailMode = 'open' | 'closed';
@@ -218,6 +247,17 @@ const DEFAULT_RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS = 300;
 const DEFAULT_RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX = 10;
 const DEFAULT_RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS = 3600;
 
+// Phase 20 observability defaults (D1/D3/D4). All non-secret: the exposition
+// endpoint path, its enablement posture, and the worker listener port.
+const DEFAULT_METRICS_PATH = '/metrics';
+const DEFAULT_WORKER_METRICS_PORT = 9464;
+/**
+ * Floor on the optional scrape token (D4(a)). A short token is brute-forceable
+ * across the internal network it is meant to complement, so a weak value fails
+ * at boot instead of producing a surface that looks authenticated.
+ */
+const METRICS_SCRAPE_TOKEN_MIN_LENGTH = 32;
+
 /**
  * Ceiling on the trusted proxy hop count (D1/§8). The chain length read out of
  * `X-Forwarded-For` is attacker-influenced input: an unbounded hop count is how
@@ -259,9 +299,17 @@ const IPV4_MAPPED_START = '::ffff:0.0.0.0';
 const MAX_WEBHOOK_MAX_ATTEMPTS = 20;
 
 function parsePort(raw: string | undefined, fallback: number): number {
+  return parsePortNamed(raw, fallback, 'PORT');
+}
+
+/**
+ * An integer port in 1–65535, with the failing variable named in the error so
+ * a misconfigured `WORKER_METRICS_PORT` says which knob to fix.
+ */
+function parsePortNamed(raw: string | undefined, fallback: number, name: string): number {
   const value = raw === undefined || raw === '' ? Number(fallback) : Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > 65535) {
-    throw new Error(`PORT must be an integer between 1 and 65535 (received "${raw}")`);
+    throw new Error(`${name} must be an integer between 1 and 65535 (received "${raw}")`);
   }
   return value;
 }
@@ -509,6 +557,83 @@ function loadRateLimitConfiguration(): BrinnPayConfig['rateLimit'] {
   };
 }
 
+/**
+ * Validates the exposition path (D1/D4(a), phase 20 §8 rule 3). The path is a
+ * routing decision an operator makes once: it must be an absolute plain path,
+ * must not collide with the surfaces that already live outside `/api/v1`
+ * (health probes, Swagger) and must never sit under the versioned contract —
+ * a metrics endpoint inside `/api/v1` would be rate-limited, request-logged
+ * and specified, all three of which §5 forbids.
+ *
+ * The path itself is not secret and may be echoed; the token may not be.
+ */
+function parseMetricsPath(raw: string | undefined): string {
+  const value = raw === undefined || raw.trim() === '' ? DEFAULT_METRICS_PATH : raw.trim();
+
+  if (!value.startsWith('/') || value === '/') {
+    throw new Error(
+      `METRICS_PATH must start with "/" and must not be the root path (received "${raw}")`,
+    );
+  }
+  if (value.includes('?') || value.includes('#') || /\s/.test(value)) {
+    throw new Error(
+      `METRICS_PATH must be a plain path without a query string, fragment or whitespace (received "${raw}")`,
+    );
+  }
+  if (value === '/api/v1' || value.startsWith('/api/v1/')) {
+    throw new Error(
+      `METRICS_PATH must not live under /api/v1: the metrics endpoint is operational, not contract surface (received "${raw}")`,
+    );
+  }
+  if (value === '/health' || value.startsWith('/health/')) {
+    throw new Error(
+      `METRICS_PATH must not shadow the health endpoints (received "${raw}")`,
+    );
+  }
+  const swaggerPath = (process.env.SWAGGER_PATH ?? 'docs').replace(/^\/+|\/+$/g, '');
+  if (swaggerPath.length > 0 && (value === `/${swaggerPath}` || value.startsWith(`/${swaggerPath}/`))) {
+    throw new Error(
+      `METRICS_PATH must not shadow the Swagger UI mount (received "${raw}")`,
+    );
+  }
+  return value;
+}
+
+/**
+ * The optional scrape token (D4(a)). `null` means network-trust only, which is
+ * a legitimate posture for the local stack; a set token must clear the length
+ * floor, and the error deliberately never echoes the value — a rejected secret
+ * has no business appearing in a boot log.
+ */
+function parseMetricsScrapeToken(raw: string | undefined): string | null {
+  if (raw === undefined || raw === '') {
+    return null;
+  }
+  if (raw.length < METRICS_SCRAPE_TOKEN_MIN_LENGTH) {
+    throw new Error(
+      `METRICS_SCRAPE_TOKEN must be at least ${METRICS_SCRAPE_TOKEN_MIN_LENGTH} characters when set (generate one with \`openssl rand -base64 48\`)`,
+    );
+  }
+  return raw;
+}
+
+/** The phase-20 observability section, parsed and validated as one unit. */
+function loadMetricsConfiguration(nodeEnv: string): BrinnPayConfig['metrics'] {
+  return {
+    // D4(a)'s enable flag: the exposition endpoint. On outside production so a
+    // clean checkout is scrapeable with zero setup (AC1); off in production so
+    // exposure is a deliberate act, not a default.
+    enabled: parseBoolean(process.env.METRICS_ENABLED, nodeEnv !== 'production', 'METRICS_ENABLED'),
+    path: parseMetricsPath(process.env.METRICS_PATH),
+    scrapeToken: parseMetricsScrapeToken(process.env.METRICS_SCRAPE_TOKEN),
+    workerPort: parsePortNamed(
+      process.env.WORKER_METRICS_PORT,
+      DEFAULT_WORKER_METRICS_PORT,
+      'WORKER_METRICS_PORT',
+    ),
+  };
+}
+
 function resolveJwtSecret(nodeEnv: string): { secret: string; accessTokenTtlSeconds: number } {
   const secret = process.env.JWT_SECRET;
   if (nodeEnv === 'test') {
@@ -724,6 +849,7 @@ export function loadConfiguration(): BrinnPayConfig {
       ),
     },
     rateLimit: loadRateLimitConfiguration(),
+    metrics: loadMetricsConfiguration(nodeEnv),
   };
 }
 

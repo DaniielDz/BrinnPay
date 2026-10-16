@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 
+import { WorkerMetricsService } from '../metrics/worker-metrics.service';
 import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WebhookEventService } from './webhook-event.service';
@@ -27,6 +28,7 @@ describe('WebhookMaintenanceService', () => {
   let events: { reconcile: jest.Mock; requeueDueDeliveries: jest.Mock };
   let queue: { ensureRepeatables: jest.Mock };
   let payments: { advanceDuePayments: jest.Mock };
+  let workerMetrics: { observeSweep: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -41,6 +43,7 @@ describe('WebhookMaintenanceService', () => {
     };
     queue = { ensureRepeatables: jest.fn().mockResolvedValue(undefined) };
     payments = { advanceDuePayments: jest.fn().mockResolvedValue(0) };
+    workerMetrics = { observeSweep: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -50,6 +53,7 @@ describe('WebhookMaintenanceService', () => {
         { provide: WebhookQueueService, useValue: queue },
         { provide: PaymentsService, useValue: payments },
         { provide: WEBHOOK_DELIVERY_POLICY, useValue: POLICY },
+        { provide: WorkerMetricsService, useValue: workerMetrics },
       ],
     }).compile();
 
@@ -148,5 +152,46 @@ describe('WebhookMaintenanceService', () => {
     await service.registerSchedule();
 
     expect(queue.ensureRepeatables).toHaveBeenCalledTimes(1);
+  });
+
+  describe('sweep instrumentation (phase 20 §6 M5)', () => {
+    it('times each half of reconciliation under its own pass label', async () => {
+      await service.reconcile();
+
+      const passes = workerMetrics.observeSweep.mock.calls.map((call) => call[0]);
+      expect(passes).toEqual(['reconciliation', 'requeue']);
+      for (const call of workerMetrics.observeSweep.mock.calls) {
+        expect(typeof call[1]).toBe('number');
+        expect(call[1]).toBeGreaterThanOrEqual(0);
+      }
+    });
+
+    it('times the advancement and retention passes', async () => {
+      await service.advancePayments();
+      await service.cleanupExpired();
+
+      const passes = workerMetrics.observeSweep.mock.calls.map((call) => call[0]);
+      expect(passes).toEqual(['advancement', 'retention']);
+    });
+
+    it('still records a pass that fails internally (finally semantics)', async () => {
+      payments.advanceDuePayments.mockRejectedValue(new Error('db down'));
+
+      await expect(service.advancePayments()).resolves.toBe(0);
+
+      expect(workerMetrics.observeSweep).toHaveBeenCalledWith('advancement', expect.any(Number));
+    });
+
+    it('never lets a metrics defect break a sweep pass (§4 rule 5)', async () => {
+      workerMetrics.observeSweep.mockImplementation(() => {
+        throw new Error('metrics down');
+      });
+
+      await expect(service.advancePayments()).resolves.toBe(0);
+      await expect(service.cleanupExpired()).resolves.toBe(0);
+      await expect(service.reconcile()).resolves.toEqual(
+        expect.objectContaining({ created: expect.any(Number) }),
+      );
+    });
   });
 });
