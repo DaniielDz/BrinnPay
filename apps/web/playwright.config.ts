@@ -129,9 +129,8 @@ export default defineConfig({
       // failed flush aborts the start (`&&`), which fails the run loudly.
       // Note: the build emits `dist/src/*` (the compiled program spans `src/`
       // plus the generated Prisma client), which is where these commands
-      // point — `apps/api/package.json`'s `start` script currently names a
-      // different path; that pre-existing mismatch is reported, not papered
-      // over here.
+      // point — `apps/api/package.json`'s `start`/`start:prod` scripts were
+      // aligned to the same real paths by the phase-21 production build work.
       command: 'node scripts/clear-rate-limit-state.mjs && node dist/src/main.js',
       cwd: path.resolve(__dirname, '../api'),
       url: `${API_ORIGIN}/health/ready`,

@@ -1,0 +1,201 @@
+name: brinnpay-production
+
+# Production-mode validation stack (Phase 21, D5(a)/D8(a), ADR-0046).
+#
+# Builds the production images (docker/api/Dockerfile.prod,
+# docker/web/Dockerfile.prod), provisions throwaway PostgreSQL/Redis, applies
+# migrations as an explicit pre-start step (D3(a)/Q1, ADR-0045), and starts
+# API + worker + web with a complete production environment. Driven by
+# `docker/production/validate.mjs`; CI wiring is Phase 23's (§12).
+#
+# Rules this file follows:
+# - No secret is committed or defaulted here: every secret is an interpolated
+#   `${VAR}` that FAILS the command when unset (`:?`) — an image or a compose
+#   layer must never carry one (§4 rule 2/3, §8 rule 1).
+# - Isolated compose project (`brinnpay-production`) — never the dev project
+#   (`brinnpay`) and never the load-test project (`brinnpay-loadtest`).
+# - Throwaway data: no named volumes; `down -v` removes everything.
+# - Only what a deployment needs is published (API, web); the worker's
+#   metrics/liveness port stays unpublished on the network (Phase 20 posture).
+# - Production defaults hold unless the run-scoped D8(a) overrides say
+#   otherwise: METRICS_ENABLED=false; COOKIE_SECURE/WEB_SECURE come from the
+#   env file (the local plain-HTTP run sets them false, run-scoped only).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brinnpay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — generate one for the run (never reuse a production value)}
+      POSTGRES_DB: ${POSTGRES_DB:-brinnpay}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-brinnpay} -d ${POSTGRES_DB:-brinnpay}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # D3(a)/Q1 (ADR-0045): migrations are an explicit pre-start one-shot step,
+  # run from the builder stage of the API image (it carries the Prisma CLI and
+  # the committed migrations). The runtime image never owns the schema; the
+  # API/worker/web services depend on this step completing successfully.
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile.prod
+      target: builder
+    image: ${MIGRATE_IMAGE:-brinnpay/migrate:0.1.0-local}
+    command: ["pnpm", "--filter", "@brinnpay/api", "prisma:migrate:deploy"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required (see docker/production.env.example)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile.prod
+    image: ${API_IMAGE:-brinnpay/api:0.1.0-local}
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SERVICE_NAME: brinnpay-api
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required (see docker/production.env.example)}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required (see docker/production.env.example)}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required (e.g. http://localhost:3001)}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (generate with `openssl rand -base64 48`)}
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:?WEBHOOK_ENCRYPTION_KEY is required (generate with `openssl rand -base64 32`)}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # D8(a): run-scoped plain-HTTP override for the local validation run
+      # only. Production expectations are COOKIE_SECURE=true / WEB_SECURE=true
+      # (Phase 18 §5); never write these relaxations back as defaults.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # No proxy in the validation stack: hop count 0 / empty CIDRs are the
+      # honest posture. A real deployment sets the proxy values (ADR-0025).
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-}
+      # Production default (F9/ADR-0040): exposition off. The validation run
+      # also asserts the enabled posture with METRICS_SCRAPE_TOKEN set.
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      METRICS_PATH: ${METRICS_PATH:-/metrics}
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+      WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
+      WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Phase 2 D9 semantics: /health/ready = dependency reachability only,
+      # never schema (F16) — which is why the migration step precedes start.
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3000/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ADR-0018: the webhook worker is the same image, a different command. It
+  # must receive the SAME JWT_SECRET and WEBHOOK_ENCRYPTION_KEY as the API
+  # (F8) — both come from the same interpolated variables above, so the
+  # environment cannot diverge inside one run.
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile.prod
+    image: ${API_IMAGE:-brinnpay/api:0.1.0-local}
+    command: ["node", "dist/src/worker.js"]
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: brinnpay-webhook-worker
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required (see docker/production.env.example)}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required (see docker/production.env.example)}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (generate with `openssl rand -base64 48`)}
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:?WEBHOOK_ENCRYPTION_KEY is required (generate with `openssl rand -base64 32`)}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      METRICS_PATH: ${METRICS_PATH:-/metrics}
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9464}
+      WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
+      WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
+    # Deliberately no published ports: /health/live and the exposition answer
+    # on the compose network only (Phase 20 posture, F9).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Liveness is served regardless of METRICS_ENABLED (D7(a)).
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:${WORKER_METRICS_PORT:-9464}/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web/Dockerfile.prod
+      args:
+        # Build-time inputs (F3/§6 M2): NEXT_PUBLIC_API_BASE_URL is inlined
+        # into the client bundle and the CSP origin; WEB_SECURE gates HSTS.
+        # The standalone server evaluates next.config headers at BUILD time,
+        # so both are build arguments — changing them requires rebuilding the
+        # web image. The D8(a) env file sets WEB_SECURE=false for the local
+        # plain-HTTP validation run only.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000/api/v1}
+        WEB_SECURE: ${WEB_SECURE:-true}
+    image: ${WEB_IMAGE:-brinnpay/web:0.1.0-local}
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOSTNAME: 0.0.0.0
+      # Same value at runtime so any dynamic render path sees it too; the
+      # standalone headers/CSP themselves are build-time (see build args).
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000/api/v1}
+      # Documentation parity with the build-time posture; inert for the
+      # standalone headers (which are baked at build) — see build args above.
+      WEB_SECURE: ${WEB_SECURE:-false}
+    ports:
+      - "${WEB_PORT:-3001}:3001"
+    healthcheck:
+      # The web app has no health endpoint (creating one is out of scope);
+      # the documented probe is HTTP 200 on `/` (§6 M2).
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3001/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s

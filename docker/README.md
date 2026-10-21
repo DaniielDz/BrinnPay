@@ -125,14 +125,124 @@ committed to the repository.
 See [`monitoring/README.md`](../monitoring/README.md) for the runbook, alert
 descriptions, and troubleshooting.
 
+## Production images and validation (Phase 21)
+
+Phase 21 adds the first production build, **additively** — the development
+stack above (`compose.yml`, `api/Dockerfile`, `web/Dockerfile`) is unchanged:
+
+```text
+docker/
+├── compose.yml                  # development (Phase 2, untouched)
+├── compose.production.yml       # production-mode validation stack
+├── api/Dockerfile               # development
+├── api/Dockerfile.prod          # production (multi-stage)
+├── web/Dockerfile               # development
+├── web/Dockerfile.prod          # production (multi-stage, standalone)
+├── production.env.example       # production configuration contract (no secrets)
+└── production/validate.mjs      # committed, idempotent validation script
+```
+
+### Image build strategy
+
+- **API/worker — one image, two entrypoints** (`docker/api/Dockerfile.prod`,
+  ADR-0043): builder stage installs from the lockfile, runs `prisma
+  generate`, and compiles; the runtime stage carries `dist/` (entrypoints
+  `dist/src/main.js` and `dist/src/worker.js`), production `node_modules`,
+  and `docs/openapi.yaml` — no TypeScript sources, no dev toolchain
+  (`tsc`/`nest`/`jest`/`eslint`), no secrets. Non-root (`node`, uid 1000),
+  pinned `node:22-bookworm-slim`, `NODE_ENV=production`.
+
+  ```sh
+  docker build -f docker/api/Dockerfile.prod -t brinnpay/api:local .
+  docker run --rm brinnpay/api:local                       # API (default)
+  docker run --rm brinnpay/api:local node dist/src/worker.js  # worker
+  ```
+
+- **Web — standalone output** (`docker/web/Dockerfile.prod`, D2(a)/Q5):
+  production `next build` inside the image; the runtime serves only the
+  traced standalone server + static assets, non-root, pinned base, port
+  **3001**. **Build-time (non-secret) arguments** — changing either requires
+  a rebuild (the standalone server evaluates `next.config` headers at build):
+  - `NEXT_PUBLIC_API_BASE_URL` — inlined into the client bundle and the CSP
+    `connect-src` origin; must match the deployed API (F3);
+  - `WEB_SECURE` — HSTS gate (ADR-0028): unset keeps the secure production
+    default (HSTS on); `false` is the run-scoped plain-HTTP posture of the
+    validation run only (D8(a)).
+
+### Configuration and secrets
+
+`production.env.example` is the committed, non-secret **configuration
+contract**: every environment key the three processes consume, classified
+required/optional and secret/non-secret, with production defaults and
+rationale. **Secrets are injected at runtime** by whatever runs the
+container (D4(a)) — never as build args, layers, labels, or committed
+files. API and worker must receive **identical** `JWT_SECRET` and
+`WEBHOOK_ENCRYPTION_KEY` (F8; validated by the script). Boot refuses to
+start on missing/weak secrets — that refusal is preserved and proven by the
+validation run (§6 M4). See `.ai/decisions/adr-0044-runtime-configuration-and-secrets-model.md`.
+
+### Migrations
+
+`prisma migrate deploy` is an explicit **pre-start step** (D3(a)/Q1,
+ADR-0045): run it before the API/worker start. The production compose file
+models it as a one-shot `migrate` service (builder stage — the runtime image
+contains no Prisma CLI); `api`/`worker` depend on it completing
+successfully. Never migrate from an entrypoint: readiness is
+reachability-only (Phase 2 D9) and cannot tell a missing schema from a
+healthy database.
+
+### Running the validation (AC5)
+
+Requires only Docker (with Compose v2) and this repository, from a clean
+checkout:
+
+```sh
+node docker/production/validate.mjs
+```
+
+The script is idempotent and self-cleaning; it uses the isolated compose
+project `brinnpay-production` (never the dev project), generates per-run
+secrets into a `0600` temp env file it deletes on exit (**no secret is ever
+printed**), and always tears down (`down -v`) — including on failure. It:
+
+1. builds both images with local tags `brinnpay/{api,web}:<version>-<sha>`
+   (no registry, no push — D6(a));
+2. proves the API **refuses** to boot without/with weak secrets (M5-2);
+3. proves the pre-migration gap (ready but failing domain — F16);
+4. applies migrations (pre-start step), then starts API + worker + web;
+5. asserts: documented probe payloads (M5-1), post-migration domain smoke
+   with registration + authenticated read (M5-3), worker liveness on
+   `WORKER_METRICS_PORT` 9464 (M5-4), web home page + API reference from the
+   canonical contract (M5-5), metrics **off by default** and token posture
+   when enabled (M5-6/6b), no secret/.env/toolchain in image layers or
+   filesystem (M5-7), plain-HTTP D8 posture (M5-8), and cross-process key
+   equality (M5-9);
+6. exits non-zero on the first failure with teardown.
+
+**TLS posture (D8(a)):** local plain HTTP with run-scoped
+`COOKIE_SECURE=false` / `WEB_SECURE=false` — so authenticated flows can be
+exercised for the right reason. The overrides live only in the generated
+per-run env file; production expectations remain `true` (recorded in
+`production.env.example`). TLS-terminated proof belongs to Phases 22/24.
+
+**Recorded evidence (AC5, 2026-10-16):** full run from a clean checkout on
+Docker 29.8.1/Compose v5.5.1, tags `brinnpay/api:0.1.0-548ba03` +
+`brinnpay/web:0.1.0-548ba03` — **10/10 checks passed** (M5-1 … M5-9 incl.
+the M5-6b/M5-7 extensions), stack torn down, no secrets printed. Details and
+rationale: `.ai/decisions/adr-0046-production-validation-procedure.md`.
+
+Swagger UI (`/docs`) ships in production unchanged (D7(a)/Q4, ADR-0047).
+
 ## Secrets
 
 No secrets are committed in this directory. Credential defaults are
-non-secret development values; production credentials belong in the production
-and deployment phases (Phases 20–24).
+non-secret development values; the production secrets model (runtime
+injection, generation commands, per-process required keys) is documented in
+[`production.env.example`](production.env.example) and ADR-0044 — real
+production credentials belong to the deployment phases (Phases 22–24).
 
 ## Later phases
 
-Production-specific Docker configuration will be introduced during the production and deployment phases.
-
-The project should avoid maintaining Docker infrastructure that is not yet required by the current phase.
+Distribution (registry, push), CI wiring, and real-environment deployment
+remain Phases 22–24's scope; this directory adds no Docker infrastructure
+beyond what Phase 21 requires.

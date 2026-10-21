@@ -99,6 +99,11 @@ export function securityHeaders(options: SecurityHeaderOptions): SecurityHeader[
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
 const nextConfig: NextConfig = {
+  // Phase 21 D2(a) (confirmed, Q5): standalone output for the production web
+  // image — the runtime serves only the traced server + assets instead of the
+  // full dependency tree. Development (`next dev`) is unaffected: the flag
+  // changes nothing about the dev server or the rendered output.
+  output: 'standalone',
   async headers() {
     return [
       {
