@@ -1,0 +1,60 @@
+import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+import { ApiKeysModule } from '../api-keys/api-keys.module';
+import { AuditLoggingCoreModule } from '../audit-logging/audit-logging-core.module';
+import { IdempotencyModule } from '../idempotency/idempotency.module';
+import { DEFAULT_SIMULATION_DELAYS, PAYMENT_DELAYS } from './payment-simulation';
+import { WebhooksCoreModule } from '../webhooks/webhooks-core.module';
+import { PaymentsController } from './payments.controller';
+import { PaymentsService } from './payments.service';
+
+/**
+ * Payments domain module (phase 7): simulated payment operations behind the
+ * shared dual-mode access boundary (API key or session JWT —
+ * `ProjectAccessGuard`, phase 18 D1 consolidated the phase 7 clone into it),
+ * the payment RBAC capabilities (D5), the money helper boundary (D8), and the
+ * payment event seam (D10 — a no-op sink until Phase 10 wires
+ * persistence/delivery).
+ *
+ * ApiKeysModule is imported so the shared guard's API-key half resolves in
+ * this module's context (Nest resolves a controller's guard in the declaring
+ * module's context). The session boundary (`SessionAuthGuard`) is provided
+ * globally by the auth module. The simulation delays are env-configurable via
+ * the shared configuration (defaults in `DEFAULT_SIMULATION_DELAYS`) so tests
+ * run deterministically.
+ *
+ * IdempotencyModule (phase 8) supplies the cross-cutting claim/replay
+ * capability that `payments.create` executes its mutation through.
+ *
+ * WebhooksCoreModule (phase 10 §4.1) supplies the inbound event port: events are
+ * persisted inside this module's transaction and delivery is scheduled after the
+ * commit. The dependency is one-directional — the webhooks module never imports
+ * the payments module for this purpose (it derives the catalog from the constant
+ * in `payment-events.ts`), and only the *worker* composition root imports both.
+ *
+ * AuditLoggingCoreModule (phase 12 §4.1) supplies the audit capture port:
+ * `payment.created` and the terminal transitions are written inside the same
+ * transaction as the payment (§6.2, D7), so a committed payment always has its
+ * entry and a rolled-back one has none.
+ */
+@Module({
+  imports: [ApiKeysModule, IdempotencyModule, WebhooksCoreModule, AuditLoggingCoreModule],
+  controllers: [PaymentsController],
+  providers: [
+    PaymentsService,
+    {
+      provide: PAYMENT_DELAYS,
+      useFactory: (config: ConfigService) => ({
+        pendingDelayMs:
+          config.get<number>('payments.pendingDelayMs') ?? DEFAULT_SIMULATION_DELAYS.pendingDelayMs,
+        settlementDelayMs:
+          config.get<number>('payments.settlementDelayMs') ??
+          DEFAULT_SIMULATION_DELAYS.settlementDelayMs,
+      }),
+      inject: [ConfigService],
+    },
+  ],
+  exports: [PaymentsService],
+})
+export class PaymentsModule {}

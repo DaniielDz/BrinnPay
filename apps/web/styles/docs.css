@@ -1,0 +1,446 @@
+/**
+ * Documentation area (phase 15 §4.2, §9.4): section navigation, guide shell,
+ * code blocks, callouts and the embedded API reference. It reuses the Phase 14
+ * tokens and the existing table/button styling — this file only adds what the
+ * docs area needs on top of it.
+ *
+ * Responsive rules keep the page itself from ever scrolling horizontally:
+ * the layout collapses to one column, long inline code wraps, and only
+ * `pre`/tables scroll inside their own region.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Layout: section navigation + content                                */
+/* ------------------------------------------------------------------ */
+
+.docs-layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.docs-layout > * {
+  min-width: 0;
+}
+
+.docs-nav {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  position: sticky;
+  top: var(--space-4);
+}
+
+.docs-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.docs-nav a {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.docs-nav a:hover {
+  background: var(--color-surface-alt);
+  text-decoration: none;
+}
+
+.docs-nav a[aria-current='page'] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-hover);
+  font-weight: 600;
+}
+
+.docs-nav .docs-nav-index {
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+@media (max-width: 60rem) {
+  .docs-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+
+  .docs-nav {
+    position: static;
+  }
+
+  .docs-nav ul {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .docs-nav .docs-nav-index {
+    border-bottom: 0;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Guide shell                                                         */
+/* ------------------------------------------------------------------ */
+
+.docs-guide-header {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-6);
+  box-shadow: var(--shadow-sm);
+}
+
+.docs-guide-header h1 {
+  margin-top: 0;
+}
+
+.docs-guide-header .hero-lead {
+  margin-bottom: 0;
+}
+
+.docs-source {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-top: var(--space-4);
+  margin-bottom: 0;
+}
+
+.docs-source code {
+  white-space: normal;
+}
+
+.docs-guide-footer {
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+/* ------------------------------------------------------------------ */
+/* Documentation index                                                 */
+/* ------------------------------------------------------------------ */
+
+.docs-index-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: var(--space-4);
+}
+
+.docs-index-entry {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.docs-index-entry h3 {
+  margin-top: 0;
+  margin-bottom: var(--space-2);
+  font-size: var(--font-size-lg);
+}
+
+.docs-index-entry h3 a {
+  color: var(--color-text);
+}
+
+.docs-index-entry h3 a:hover {
+  color: var(--color-primary);
+}
+
+.docs-index-entry p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ------------------------------------------------------------------ */
+/* Code examples                                                       */
+/* ------------------------------------------------------------------ */
+
+.docs-page code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--color-surface-alt);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.3em;
+  overflow-wrap: anywhere;
+}
+
+.docs-code {
+  margin: 0 0 var(--space-4);
+}
+
+.docs-code figcaption {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.docs-code pre,
+.docs-page .docs-base-url {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-text);
+  color: var(--color-bg);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+}
+
+.docs-code pre code,
+.docs-page .docs-base-url code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.docs-code-list {
+  margin-bottom: var(--space-4);
+}
+
+/* ------------------------------------------------------------------ */
+/* Callouts                                                            */
+/* ------------------------------------------------------------------ */
+
+.docs-callout {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.docs-callout-title {
+  font-weight: 600;
+  margin: 0 0 var(--space-1);
+}
+
+.docs-callout-body > :first-child {
+  margin-top: 0;
+}
+
+.docs-callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+.docs-callout-important {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.docs-callout-warning {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+
+/* ------------------------------------------------------------------ */
+/* Contract rendering (API reference)                                  */
+/* ------------------------------------------------------------------ */
+
+.docs-method {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+.docs-method-get {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-hover);
+}
+
+.docs-method-post {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.docs-method-patch,
+.docs-method-put {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.docs-method-delete {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.docs-reference-toc-group {
+  margin-bottom: var(--space-4);
+}
+
+.docs-reference-toc-group h3 {
+  margin-bottom: var(--space-2);
+  font-size: var(--font-size-base);
+}
+
+.docs-reference-toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.docs-reference-toc a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.docs-reference-tag > h3 {
+  font-family: var(--font-mono);
+}
+
+.docs-tag-description {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.docs-op,
+.docs-schema {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.docs-op h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.docs-op-path {
+  font-size: var(--font-size-base);
+  background: none;
+  padding: 0;
+  overflow-wrap: anywhere;
+}
+
+.docs-op-summary {
+  color: var(--color-text-muted);
+  margin-top: 0;
+}
+
+.docs-op-id {
+  background: none;
+  color: var(--color-text-muted);
+  padding: 0;
+  font-size: 0.85em;
+}
+
+.docs-op h4 {
+  margin-bottom: var(--space-2);
+  margin-top: var(--space-4);
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.docs-security {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.docs-none {
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-size: var(--font-size-sm);
+}
+
+.docs-enum code,
+.docs-enum-inline {
+  font-size: var(--font-size-sm);
+}
+
+.docs-schema-type {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+}
+
+.docs-schema-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  list-style: none;
+  padding: 0;
+  margin-bottom: var(--space-5);
+}
+
+.docs-markdown p:last-child,
+.docs-markdown ul:last-child {
+  margin-bottom: 0;
+}
+
+.docs-markdown code {
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Misc                                                                */
+/* ------------------------------------------------------------------ */
+
+.docs-stat-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-3);
+  list-style: none;
+  padding: 0;
+  margin-bottom: var(--space-5);
+}
+
+.docs-stat {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.docs-stat strong {
+  display: block;
+  font-size: var(--font-size-lg);
+}
+
+.docs-stat span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

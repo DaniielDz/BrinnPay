@@ -1,0 +1,150 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+import type { Params } from 'nestjs-pino';
+
+import type { BrinnPayConfig } from '../config/configuration';
+import { resolveRequestId } from '../request-id/request-id';
+
+export const REDACT_CENSOR = '[REDACTED]';
+
+/**
+ * Redaction paths applied to every log line from day one (phase 1 §10). Full
+ * request bodies are redacted; passwords, API keys, webhook secrets, tokens,
+ * idempotency keys, and card-like payloads must never be written to logs — at
+ * any nesting level (paths are declared for both the top-level key and a
+ * wildcard position).
+ *
+ * `idempotency-key` is redacted since Phase 8: `payments.create` is a live
+ * idempotent consumer, so the header is client-identifying retry data that must
+ * not reach structured logs, error messages, request logs, or audit logs
+ * (phase 8 §6.6). It was not redacted before because no endpoint used
+ * idempotency keys yet.
+ */
+export const REDACT_PATHS: string[] = [
+  'req.body',
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'req.headers["x-api-key"]',
+  'req.headers["idempotency-key"]',
+  'res.headers["set-cookie"]',
+  'password',
+  '*.password',
+  'current_password',
+  '*.current_password',
+  'new_password',
+  '*.new_password',
+  'secret',
+  '*.secret',
+  'token',
+  '*.token',
+  'access_token',
+  '*.access_token',
+  'refresh_token',
+  '*.refresh_token',
+  'api_key',
+  '*.api_key',
+  'apiKey',
+  '*.apiKey',
+  'idempotency-key',
+  '*.idempotency-key',
+  'idempotency_key',
+  '*.idempotency_key',
+  'authorization',
+  '*.authorization',
+  'card',
+  '*.card',
+  'signing_secret',
+  '*.signing_secret',
+  'signingSecret',
+  '*.signingSecret',
+  // The at-rest AES-GCM envelope of a webhook signing secret (phase 10 D8). Not
+  // logged by any code path today, but these are the ciphertext, IV and auth tag
+  // of every endpoint secret, so they belong in the same last-line-of-defence
+  // list as `api_key`. Redaction paths match whole key names, not prefixes, so
+  // `secret`/`*.secret` above do not cover `secret_ciphertext`.
+  'secret_ciphertext',
+  '*.secret_ciphertext',
+  'secretCipher',
+  '*.secretCipher',
+  'secret_iv',
+  '*.secret_iv',
+  'secretIv',
+  '*.secretIv',
+  'secret_auth_tag',
+  '*.secret_auth_tag',
+  'secretAuthTag',
+  '*.secretAuthTag',
+  'card_number',
+  '*.card_number',
+  'cvc',
+  '*.cvc',
+];
+
+type LogRequest = IncomingMessage;
+
+/**
+ * Structured JSON logging with request IDs and redaction (D3). Uses
+ * `pino-pretty` only for readable local development output; production and
+ * test environments emit JSON.
+ *
+ * `metricsPath` (phase 20 §8) silences the auto-logged line for scrapes of the
+ * exposition endpoint — a scrape every 15 s is machine traffic, not an
+ * application event. Passed only while the endpoint is exposed, so a disabled
+ * endpoint keeps its ordinary 404 line. The health paths stay exact-match,
+ * as they have been since phase 2.
+ */
+export function buildLoggerOptions(
+  config: Pick<BrinnPayConfig, 'logLevel' | 'nodeEnv'> & { metricsPath?: string },
+): Params {
+  const metricsPath = config.metricsPath;
+  return {
+    pinoHttp: {
+      level: config.logLevel,
+      redact: {
+        paths: REDACT_PATHS,
+        censor: REDACT_CENSOR,
+      },
+      genReqId: (request: IncomingMessage, response: ServerResponse): string => {
+        const requestId = resolveRequestId(request);
+        response.setHeader('X-Request-Id', requestId);
+        return requestId;
+      },
+      serializers: {
+        req: (request: LogRequest) => ({
+          id: request.id,
+          method: request.method,
+          url: request.url,
+        }),
+        res: (response: ServerResponse & { statusCode: number }) => ({
+          statusCode: response.statusCode,
+        }),
+      },
+      autoLogging: {
+        ignore: (request) => {
+          if (request.url === '/health/live' || request.url === '/health/ready') {
+            return true;
+          }
+          if (metricsPath === undefined) {
+            return false;
+          }
+          // Same path semantics as the endpoint itself: the query string is
+          // not part of the path.
+          const requestPath = (request.url ?? '').split('?', 1)[0];
+          return requestPath === metricsPath;
+        },
+      },
+      ...(config.nodeEnv === 'development'
+        ? {
+            transport: {
+              target: 'pino-pretty',
+              options: {
+                singleLine: true,
+                translateTime: 'SYS:standard',
+                colorize: true,
+              },
+            },
+          }
+        : {}),
+    },
+  };
+}

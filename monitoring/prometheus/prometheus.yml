@@ -1,0 +1,69 @@
+# BrinnPay local monitoring stack — Prometheus (Phase 20 D1(a)/D2(a)/D4(a)).
+#
+# Only loopback/compose-network endpoints; no external hosts, no credential
+# *values* — the optional scrape token lives in a container-local file written
+# at container start (§8 rule 8). Loaded by the `monitoring` compose profile
+# (docker/compose.yml), never by the app itself.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+# Phase 20 D6(a): rules-only alerting. Notification target is the local
+# `alert-receiver` service (webhook); human routing is deferred (ADR-0041).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # The API process. D4(a): the exposition is optional-token. Prometheus does
+  # not expand ${VARS} in its config file (verified on v3.13.4), so the token
+  # arrives through `credentials_file` — written by the compose entrypoint at
+  # container start from METRICS_SCRAPE_TOKEN (empty file when unset =
+  # network-trust local default, which the endpoint then enforces as no-auth).
+  # The file is re-read on every scrape and is never committed.
+  - job_name: brinnpay-api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/brinnpay_scrape_token
+    static_configs:
+      - targets: ["api:3000"]
+        labels:
+          plane: api
+
+  # The webhook worker's own listener (Phase 20 D3(a); ADR-0040). Same token
+  # posture as the API.
+  - job_name: brinnpay-worker
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/brinnpay_scrape_token
+    static_configs:
+      - targets: ["worker:9464"]
+        labels:
+          plane: worker
+
+  # Dependency visibility for the infrastructure dashboard (M3): Postgres and
+  # Redis are reached through their exporters, never through the app.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  # Self-monitoring of the stack itself.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]

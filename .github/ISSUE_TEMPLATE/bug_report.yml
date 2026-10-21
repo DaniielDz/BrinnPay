@@ -1,0 +1,43 @@
+name: Reporte de bug
+description: Algo no funciona como se espera
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar el problema. Revisa que no exista ya un issue abierto con el mismo comportamiento.
+        **Si el reporte es una vulnerabilidad de seguridad, cierra este formulario y usa el [canal privado](https://github.com/DaniielDz/BrinnPay/security/advisories/new).**
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: ¿Qué sucedió?
+      description: Describe el comportamiento observed y el comportamiento esperado.
+      placeholder: "Ej: al crear un pago con Idempotency-Key repetida esperaba un replay de la respuesta original pero llega 409…"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Pasos para reproducir
+      description: Cuanto más preciso, más fácil de reproducir.
+      placeholder: |
+        1. Clonar el repo y levantar con `docker compose …`
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Entorno
+      description: SO, versión de Node/pnpm/Docker, rama/commit.
+      placeholder: "macOS 15, Node 22, pnpm 12.4.1, commit abc1234 (develop)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs o evidencia
+      description: Pega logs relevantes (sin secretos, tokens ni credenciales).
+      render: shell

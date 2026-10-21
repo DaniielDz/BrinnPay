@@ -1,0 +1,34 @@
+{
+  "name": "brinnpay",
+  "version": "0.1.0",
+  "description": "Sandbox de infraestructura de pagos para desarrolladores (API REST + dashboard)",
+  "main": "index.js",
+  "scripts": {
+    "lint": "pnpm -r lint && pnpm lint:openapi",
+    "lint:openapi": "redocly lint docs/openapi.yaml",
+    "audit:deps": "pnpm audit --prod --audit-level=high",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm -r test:e2e",
+    "test:coverage": "pnpm --filter @brinnpay/api test:coverage && pnpm --filter @brinnpay/web test:coverage",
+    "test:browser": "pnpm --filter @brinnpay/web test:browser",
+    "build": "pnpm -r build",
+    "loadtest": "node loadtest/scripts/run.mjs",
+    "loadtest:inspect": "node loadtest/scripts/inspect.mjs"
+  },
+  "keywords": [],
+  "author": "Daniel Diaz",
+  "license": "MIT",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.4.1",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.4.1",
+  "type": "module",
+  "devDependencies": {
+    "@redocly/cli": "^2.62.1"
+  }
+}

@@ -1,0 +1,84 @@
+/**
+ * Authentication area (phase 14 §5): the same branding and navigation as the
+ * public shell, framing the Phase 3 forms. Presentation only — the flows,
+ * fields, guards and error surfaces are unchanged (phase 3 §4.2/§5).
+ */
+
+.auth-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.auth-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.auth-header nav ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+}
+
+.auth-header nav a {
+  color: var(--color-text);
+}
+
+.auth-main {
+  flex: 1;
+  width: 100%;
+  max-width: 26rem;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+}
+
+.auth-main section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.auth-main form {
+  border: none;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.auth-footer {
+  padding: var(--space-4) var(--space-5);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.auth-footer p {
+  margin: 0;
+}
+
+@media (max-width: 40rem) {
+  .auth-header {
+    padding: var(--space-3);
+  }
+
+  .auth-main {
+    padding: var(--space-5) var(--space-3);
+  }
+
+  .auth-main section {
+    padding: var(--space-4);
+  }
+}

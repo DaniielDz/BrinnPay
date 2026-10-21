@@ -1,0 +1,103 @@
+# BrinnPay web — production image (Phase 21, D2(a), ADR-0043).
+#
+# Production `next build` (standalone output) inside the image; the runtime
+# serves the built output with production behavior — no dev server, no source
+# tree, no build toolchain (§6 M2). The dev Dockerfile (`docker/web/Dockerfile`)
+# and `docker/compose.yml` are untouched (D1(a)/§4 rule 7).
+#
+# Build-time inputs (non-secret build arguments — §6 M3):
+#   NEXT_PUBLIC_API_BASE_URL  inlined into the client bundle (F3) and used for
+#                             the CSP `connect-src` origin. Changing the API
+#                             origin for a deployed image requires a REBUILD,
+#                             and the value must match the deployed API.
+# `docs/openapi.yaml` (ADR-0030) is a build input: the API reference is
+# generated from the canonical contract at build time, and the file is also
+# kept in the runtime image so the loader stays resolvable if a route ever
+# renders dynamically (F4).
+
+# Pinned base: same Node major and Debian-slim family as dev/CI (Node 22).
+# No `:latest`; digest-level pinning belongs with Phases 23/24 (D6 boundary).
+FROM node:22-bookworm-slim AS builder
+
+ENV PNPM_HOME=/pnpm \
+  PATH=/pnpm:$PATH
+
+RUN corepack enable \
+  && corepack prepare pnpm@12.4.1 --activate
+
+WORKDIR /app
+
+# Layer order for cache-friendliness (§16): manifests + lockfile first.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+RUN pnpm install --frozen-lockfile
+
+# Canonical contract at its walk-up location (lib/docs/openapi.ts resolves
+# `docs/openapi.yaml` by walking up from the working directory).
+COPY docs/openapi.yaml docs/openapi.yaml
+
+# Application source (`.dockerignore` already excludes host `.next/` output).
+COPY apps/web apps/web
+
+WORKDIR /app/apps/web
+
+# Non-secret, documented build arguments (F3/§6 M2):
+#   NEXT_PUBLIC_API_BASE_URL  inlined into the client bundle and used for the
+#                             CSP `connect-src` origin. Changing the API origin
+#                             for a deployed image requires a REBUILD, and the
+#                             value must match the deployed API.
+#   WEB_SECURE                gates HSTS (ADR-0028). The standalone server
+#                             evaluates `next.config` headers at BUILD time,
+#                             so this too is a build-time input: unset keeps
+#                             the secure production default (HSTS on, because
+#                             NODE_ENV=production); an explicit "false" is the
+#                             D8(a) run-scoped plain-HTTP posture for the
+#                             validation image — never a production default.
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000/api/v1
+ARG WEB_SECURE=
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL} \
+  WEB_SECURE=${WEB_SECURE}
+
+RUN pnpm build
+
+# ---------------------------------------------------------------------------
+# Runtime: Next.js standalone output — the traced server, its production
+# dependencies, and the static assets. Non-root; no pnpm, no source tree.
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS runtime
+
+ARG VERSION=0.1.0
+LABEL org.opencontainers.image.title="BrinnPay web" \
+  org.opencontainers.image.description="BrinnPay public site and developer dashboard (production runtime)" \
+  org.opencontainers.image.version="${VERSION}" \
+  org.opencontainers.image.source="https://github.com/DaniielDz/BrinnPay" \
+  org.opencontainers.image.licenses="MIT"
+
+ENV NODE_ENV=production \
+  PORT=3001 \
+  HOSTNAME=0.0.0.0
+
+WORKDIR /app
+
+# Standalone output mirrors the monorepo layout: server.js sits at
+# apps/web/server.js with the traced node_modules tree above it.
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+
+# Canonical contract kept resolvable at runtime (F4): the working directory
+# is /app, so lib/docs/openapi.ts finds /app/docs/openapi.yaml on its walk-up.
+COPY --from=builder /app/docs/openapi.yaml /app/docs/openapi.yaml
+
+# Non-root runtime user (provided by the base image).
+USER node
+
+EXPOSE 3001
+
+# Probe contract (§6 M2): HTTP 200 on `/` — the web app has no health
+# endpoint and inventing one is out of scope (§12). Informational only;
+# the validation/deployment definition owns probe semantics.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3001}/`).then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
+CMD ["node", "apps/web/server.js"]

@@ -1,0 +1,242 @@
+/**
+ * Authenticated area (phase 14 §6, §7.1): the dashboard shell — top bar with
+ * identity/sign-out/budget indicator, responsive navigation disclosure, and the
+ * feature-view vocabulary (environment selector, quick links, badges).
+ *
+ * Responsive rule (§7.1): the sidebar collapses behind an accessible disclosure
+ * (a button with `aria-expanded`) below `--sidebar-breakpoint`; tables scroll
+ * inside their own region instead of breaking the page; nothing scrolls
+ * horizontally at mobile widths.
+ */
+
+.dashboard-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.dashboard-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dashboard-brand {
+  font-weight: 700;
+  color: var(--color-text);
+  font-size: var(--font-size-lg);
+}
+
+.dashboard-brand:hover {
+  text-decoration: none;
+  color: var(--color-primary);
+}
+
+.dashboard-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.dashboard-identity {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  text-align: right;
+  max-width: 16rem;
+}
+
+.identity-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-email {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rate-limit-indicator {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: var(--space-1) var(--space-3);
+  white-space: nowrap;
+}
+
+.rate-limit-remaining {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.nav-toggle {
+  display: none;
+}
+
+.dashboard-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-3);
+}
+
+.dashboard-sidebar nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.dashboard-sidebar nav a {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+}
+
+.dashboard-sidebar nav a:hover {
+  background: var(--color-surface-alt);
+  text-decoration: none;
+}
+
+/* Current-location state (§6.1): visible and machine-readable. */
+.dashboard-sidebar nav a[aria-current='page'] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-hover);
+  font-weight: 600;
+}
+
+.dashboard-main {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-5);
+  max-width: var(--content-max-width);
+}
+
+.dashboard-main > section > section {
+  margin-bottom: var(--space-6);
+}
+
+.quick-links ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: 0;
+  margin: 0;
+}
+
+.quick-links li a {
+  display: inline-block;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.quick-links li a:hover {
+  background: var(--color-surface-alt);
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Environment selector (§6.5): operable buttons with a selected state */
+/* ------------------------------------------------------------------ */
+
+.environment-selector {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
+.env-option {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.env-option:hover:not(:disabled) {
+  background: var(--color-surface);
+}
+
+.env-option.env-selected {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ------------------------------------------------------------------ */
+/* Small screens: disclosure navigation, reflowing content            */
+/* ------------------------------------------------------------------ */
+
+@media (max-width: 52rem) {
+  .nav-toggle {
+    display: inline-block;
+    order: -1;
+  }
+
+  .dashboard-sidebar {
+    display: none;
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .dashboard-sidebar.is-open {
+    display: block;
+  }
+
+  .dashboard-body {
+    flex-direction: column;
+  }
+
+  .dashboard-main {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .dashboard-identity {
+    max-width: 100%;
+    text-align: left;
+  }
+
+  .dashboard-header-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .item-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

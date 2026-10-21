@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Runtime / cache
+.cache/
+.tmp/
+temp/
+*.log
+
+# Testing
+.nyc_output/
+playwright-report/
+test-results/
+
+# TypeScript
+*.tsbuildinfo
+
+# Next.js / Vercel
+.vercel/
+
+# Prisma local databases
+*.db
+*.db-journal
+
+# Prisma generated client
+apps/api/generated/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Load-test harness (phase 19): runtime state (generated credentials for the
+# local stack — never committed) and raw per-run results. The committed
+# artifacts are docs/performance-baseline.md and docs/performance-findings.md.
+loadtest/.state/
+loadtest/results/

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Vulnerabilidad de seguridad
+    url: https://github.com/DaniielDz/BrinnPay/security/advisories/new
+    about: No abras un issue público para vulnerabilidades; usa el canal privado.
+  - name: Documentación del proyecto
+    url: https://github.com/DaniielDz/BrinnPay/blob/develop/README.md
+    about: Lee el README y las guías antes de abrir un issue.

@@ -1,0 +1,36 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "loadtest"
+
+# Build-script approval (pnpm 12 blocks unapproved build scripts by default):
+# - Prisma engines are required by @prisma/client at runtime;
+# - esbuild needs its platform binary wiring;
+# - argon2 compiles/prebuilds its native binding;
+# - @scarf/scarf (telemetry) is explicitly ignored.
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  esbuild: true
+  prisma: true
+  argon2: true
+  "@scarf/scarf": false
+  # msgpackr-extract is BullMQ's optional native msgpack accelerator; BullMQ
+  # falls back to the pure-JS implementation, so no build is required.
+  msgpackr-extract: false
+
+# Dependency-vulnerability gating (phase 18 D4(a), ADR-0036): `pnpm audit:deps`
+# fails CI on high/critical advisories among production dependencies, so the
+# lockfile must keep every production dependency at a non-vulnerable version.
+# These three are transitive pins inside direct dependencies that have not
+# shipped a fixed release yet; the overrides move only the vulnerable package
+# onto its patched line (no API surface of our own code changes):
+# - postcss: pinned by `next`'s own dependency (build-time CSS pipeline).
+# - deepmerge-ts / mysql2: shipped inside Prisma's client/CLI tree.
+# - js-yaml: shipped inside @nestjs/swagger's OpenAPI parsing tree (scoped
+#   override: other tooling still consumes the js-yaml 3.x line).
+overrides:
+  postcss: ^8.5.23
+  deepmerge-ts: ^8.0.0
+  mysql2: ^3.23.1
+  "@nestjs/swagger>js-yaml": ^5.4.1

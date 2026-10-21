@@ -1,0 +1,134 @@
+{
+  "title": "BrinnPay — API",
+  "uid": "brinnpay-api",
+  "tags": ["brinnpay", "phase-20"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request rate (req/s by status class)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (status_class) (rate(brinnpay_http_requests_total{plane=\"api\"}[5m]))",
+          "legendFormat": "{{status_class}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Request duration p95 / p50 (s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(brinnpay_http_request_duration_seconds_bucket{plane=\"api\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(brinnpay_http_request_duration_seconds_bucket{plane=\"api\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "5xx rate and unhandled exceptions",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(brinnpay_http_server_errors_total{plane=\"api\"}[5m]))",
+          "legendFormat": "5xx/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(brinnpay_http_unhandled_exceptions_total{plane=\"api\"}[5m]))",
+          "legendFormat": "unhandled/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Rate limiting — throttled, exhaustion, degraded",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (class) (rate(brinnpay_rate_limit_throttled_requests_total[5m]))",
+          "legendFormat": "throttled {{class}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (class) (rate(brinnpay_rate_limit_window_exhaustion_total[5m]))",
+          "legendFormat": "exhaustion {{class}}",
+          "refId": "B"
+        },
+        {
+          "expr": "brinnpay_rate_limit_degraded",
+          "legendFormat": "degraded",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request-log writes (rate + failures)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(brinnpay_request_log_writes_total[5m]))",
+          "legendFormat": "writes/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(brinnpay_request_log_write_failures_total[5m]))",
+          "legendFormat": "failures/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "In-flight requests (API)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(brinnpay_http_requests_in_flight{plane=\"api\"})",
+          "legendFormat": "in-flight",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Top routes by 5xx (route template)",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "topk(5, sum by (route) (rate(brinnpay_http_server_errors_total{plane=\"api\"}[5m])))",
+          "legendFormat": "{{route}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

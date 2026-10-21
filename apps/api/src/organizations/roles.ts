@@ -1,0 +1,127 @@
+/**
+ * Phase 4 role and permission model (§4.3, D2/D3).
+ *
+ * Single source of truth for role constants, capabilities, and the
+ * role → capability matrix inside `apps/api`. The RBAC guard, the
+ * organization service, and the DTOs all derive from here; later phases
+ * (5–13) extend the capability registry without duplicating the matrix.
+ */
+
+export const ROLES = ['owner', 'admin', 'member', 'viewer'] as const;
+export type Role = (typeof ROLES)[number];
+
+export const CAPABILITIES = {
+  ORGANIZATIONS_READ: 'organizations.read',
+  ORGANIZATIONS_UPDATE: 'organizations.update',
+  ORGANIZATIONS_DELETE: 'organizations.delete',
+  MEMBERS_READ: 'members.read',
+  MEMBERS_UPDATE: 'members.update',
+  MEMBERS_REMOVE: 'members.remove',
+  INVITATIONS_READ: 'invitations.read',
+  INVITATIONS_CREATE: 'invitations.create',
+  INVITATIONS_CANCEL: 'invitations.cancel',
+  PROJECTS_READ: 'projects.read',
+  PROJECTS_CREATE: 'projects.create',
+  PROJECTS_UPDATE: 'projects.update',
+  PROJECTS_DELETE: 'projects.delete',
+  API_KEYS_READ: 'apiKeys.read',
+  API_KEYS_CREATE: 'apiKeys.create',
+  API_KEYS_REVOKE: 'apiKeys.revoke',
+  CUSTOMERS_READ: 'customers.read',
+  CUSTOMERS_CREATE: 'customers.create',
+  CUSTOMERS_UPDATE: 'customers.update',
+  CUSTOMERS_DELETE: 'customers.delete',
+  PAYMENTS_READ: 'payments.read',
+  PAYMENTS_CREATE: 'payments.create',
+  REFUNDS_READ: 'refunds.read',
+  REFUNDS_CREATE: 'refunds.create',
+  WEBHOOKS_READ: 'webhooks.read',
+  WEBHOOKS_CREATE: 'webhooks.create',
+  WEBHOOKS_UPDATE: 'webhooks.update',
+  WEBHOOKS_DELETE: 'webhooks.delete',
+  WEBHOOKS_REPLAY: 'webhooks.replay',
+  LOGS_READ: 'logs.read',
+} as const;
+
+export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
+
+/**
+ * The Phase 4 matrix (§4.3). Rows list the roles granted each capability.
+ * Target-level restrictions (non-`owner` targets for admins, `owner`-granting
+ * by owners only) and self-service exceptions (`members.remove` self-removal,
+ * `members.update` self-demotion) are enforced by the service layer on top of
+ * this matrix.
+ */
+const MATRIX: Record<Capability, readonly Role[]> = {
+  [CAPABILITIES.ORGANIZATIONS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.ORGANIZATIONS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.ORGANIZATIONS_DELETE]: ['owner'],
+  [CAPABILITIES.MEMBERS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.MEMBERS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.MEMBERS_REMOVE]: ['owner', 'admin'],
+  [CAPABILITIES.INVITATIONS_READ]: ['owner', 'admin'],
+  [CAPABILITIES.INVITATIONS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.INVITATIONS_CANCEL]: ['owner', 'admin'],
+  // Phase 5 matrix (§4.3, D3): read/project and read/api-keys for every
+  // member role; create/update/delete/revoke are administrative (owner+admin).
+  [CAPABILITIES.PROJECTS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.PROJECTS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.PROJECTS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.PROJECTS_DELETE]: ['owner', 'admin'],
+  [CAPABILITIES.API_KEYS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.API_KEYS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.API_KEYS_REVOKE]: ['owner', 'admin'],
+  // Phase 6 matrix (§4.3, D5): customer data is project data — reading is
+  // available to every member role; mutating customers is administrative
+  // (owner + admin), following the Phase 5 project-resources pattern.
+  [CAPABILITIES.CUSTOMERS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.CUSTOMERS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.CUSTOMERS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.CUSTOMERS_DELETE]: ['owner', 'admin'],
+  // Phase 7 matrix (§4.3, D5): payments are project data — reading is
+  // available to every member role; creating payments is administrative
+  // (owner + admin), following the Phase 5/6 project-resources pattern.
+  [CAPABILITIES.PAYMENTS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.PAYMENTS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.REFUNDS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.REFUNDS_CREATE]: ['owner', 'admin'],
+  // Phase 10 matrix (§4.5, D10): reading endpoints, events, and deliveries is
+  // available to every member role; registering, editing (including the
+  // `enabled` switch), deleting, and replaying are administrative (owner+admin),
+  // following the Phase 5/6/7/9 project-resource pattern. `webhooks.read` covers
+  // all three read surfaces so a member can debug a delivery without write
+  // access, and a project-scoped API key is a full project operator — roles are
+  // not evaluated in API-key mode.
+  [CAPABILITIES.WEBHOOKS_READ]: ['owner', 'admin', 'member', 'viewer'],
+  [CAPABILITIES.WEBHOOKS_CREATE]: ['owner', 'admin'],
+  [CAPABILITIES.WEBHOOKS_UPDATE]: ['owner', 'admin'],
+  [CAPABILITIES.WEBHOOKS_DELETE]: ['owner', 'admin'],
+  [CAPABILITIES.WEBHOOKS_REPLAY]: ['owner', 'admin'],
+  // Phase 11 matrix (§4.4, D2): request logs are metadata only — no bodies, no
+  // secrets (§4.2 rule 4) — so reading them follows the read-for-every-role
+  // pattern of Phases 5–10. The owner/admin-only alternative (`invitations.read`
+  // precedent) was considered and rejected: this is a routine debugging surface.
+  // The route is session-only, so API keys never reach capability evaluation.
+  [CAPABILITIES.LOGS_READ]: ['owner', 'admin', 'member', 'viewer'],
+};
+
+export function isRole(value: string): value is Role {
+  return (ROLES as readonly string[]).includes(value);
+}
+
+export function can(role: Role, capability: Capability): boolean {
+  return MATRIX[capability].includes(role);
+}
+
+/** Owner > admin > member > viewer; used for the self-demotion rule. */
+const ROLE_RANK: Record<Role, number> = {
+  owner: 4,
+  admin: 3,
+  member: 2,
+  viewer: 1,
+};
+
+/** Whether `to` is strictly lower-ranked than `from`. */
+export function isDownward(from: Role, to: Role): boolean {
+  return ROLE_RANK[to] < ROLE_RANK[from];
+}

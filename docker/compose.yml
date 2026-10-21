@@ -1,0 +1,305 @@
+name: brinnpay
+
+# Local development services (Phase 2). No secrets are committed here: values
+# are read from the shell environment or the gitignored `.env` file, with
+# non-secret development defaults (D7).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brinnpay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brinnpay}
+      POSTGRES_DB: ${POSTGRES_DB:-brinnpay}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-brinnpay} -d ${POSTGRES_DB:-brinnpay}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      SERVICE_NAME: brinnpay-api
+      DATABASE_URL: postgresql://${POSTGRES_USER:-brinnpay}:${POSTGRES_PASSWORD:-brinnpay}@postgres:5432/${POSTGRES_DB:-brinnpay}?schema=public
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGINS: http://localhost:3001
+      # Required outside test (boot-time validation, phase 3 §7.7): set
+      # JWT_SECRET in the local .env (e.g. `openssl rand -base64 48`).
+      JWT_SECRET: ${JWT_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Phase 10: the key protecting endpoint signing secrets at rest (D8). Set
+      # WEBHOOK_ENCRYPTION_KEY in the local .env (`openssl rand -base64 32`);
+      # the worker needs the SAME key to sign deliveries.
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
+      WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
+      WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
+      # Phase 13: rate-limit policy. Defaults here are the code defaults, listed
+      # explicitly so the local stack documents them (none are secret). The
+      # `auth.*` classes keep their phase 3 `AUTH_RATE_LIMIT_*` names and values.
+      RATE_LIMIT_READ_MAX: ${RATE_LIMIT_READ_MAX:-600}
+      RATE_LIMIT_WRITE_MAX: ${RATE_LIMIT_WRITE_MAX:-120}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_WEBHOOK_REPLAY_MAX: ${RATE_LIMIT_WEBHOOK_REPLAY_MAX:-20}
+      RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS: ${RATE_LIMIT_WEBHOOK_REPLAY_WINDOW_SECONDS:-300}
+      RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX: ${RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_MAX:-10}
+      RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS: ${RATE_LIMIT_WEBHOOK_ENDPOINT_CREATE_WINDOW_SECONDS:-3600}
+      RATE_LIMIT_FAIL_MODE: ${RATE_LIMIT_FAIL_MODE:-open}
+      # The auth.* classes keep their phase-3 names (ADR-0024 catalog). Listed
+      # explicitly, with the code defaults, so a local load stack can raise the
+      # *IP* scopes through ordinary documented config (phase 19 AC7) — the
+      # account scope stays at its ADR-0037 AR-3 default by design, and no
+      # default value changes here.
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-900}
+      AUTH_RATE_LIMIT_IP_LOGIN_MAX: ${AUTH_RATE_LIMIT_IP_LOGIN_MAX:-10}
+      AUTH_RATE_LIMIT_ACCOUNT_LOGIN_MAX: ${AUTH_RATE_LIMIT_ACCOUNT_LOGIN_MAX:-10}
+      AUTH_RATE_LIMIT_IP_REFRESH_MAX: ${AUTH_RATE_LIMIT_IP_REFRESH_MAX:-60}
+      AUTH_RATE_LIMIT_IP_READ_MAX: ${AUTH_RATE_LIMIT_IP_READ_MAX:-100}
+      # No proxy in the local stack: the socket peer is the client, and forwarded
+      # headers are ignored for limit purposes (D1).
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-}
+      # Phase 20: the exposition endpoint. On by default outside production
+      # (the code default, listed for documentation); METRICS_SCRAPE_TOKEN is
+      # empty locally (network trust) and is strongly recommended once the
+      # stack runs anywhere shared (§8/monitoring/README.md).
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_PATH: ${METRICS_PATH:-/metrics}
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../apps/api/src:/app/apps/api/src
+      - ../apps/api/test:/app/apps/api/test
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3000/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # Phase 10 D14: the webhook worker is a separate process with its own
+  # entrypoint (`apps/api/src/worker.ts`). The API only enqueues; this process
+  # signs and performs the delivery attempts, runs the reconciliation and payment
+  # advancement sweeps, and prunes expired events. It shares the database, Redis,
+  # and the webhook encryption key, and exposes no HTTP port.
+  #
+  # Opt-in via the `worker` profile: the phase-10 e2e suites manage their own
+  # workers in-process and assert untouched queue state (attempts=0, status
+  # pending), which a long-running consumer would break. Start it explicitly
+  # when you need live deliveries/sweeps on the dev stack:
+  #   docker compose --profile worker up -d
+  # The phase-19 load-test runner always enables this profile (its scenarios
+  # measure sweep- and worker-driven behavior on an isolated stack).
+  worker:
+    profiles: ["worker"]
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    command: ["pnpm", "worker:dev"]
+    environment:
+      NODE_ENV: development
+      SERVICE_NAME: brinnpay-webhook-worker
+      DATABASE_URL: postgresql://${POSTGRES_USER:-brinnpay}:${POSTGRES_PASSWORD:-brinnpay}@postgres:5432/${POSTGRES_DB:-brinnpay}?schema=public
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Required outside test: imported through the same module graph as the API.
+      JWT_SECRET: ${JWT_SECRET:-}
+      # Must equal the API's value: a mismatch would make every delivery fail its
+      # signature (D8).
+      WEBHOOK_ENCRYPTION_KEY: ${WEBHOOK_ENCRYPTION_KEY:-}
+      WEBHOOK_DESTINATION_ALLOWLIST: ${WEBHOOK_DESTINATION_ALLOWLIST:-}
+      WEBHOOK_DESTINATION_DENYLIST: ${WEBHOOK_DESTINATION_DENYLIST:-}
+      # Phase 20 D3(a)/D7(a): the worker serves /health/live and the exposition
+      # on its own port. The port is deliberately **not** published to the host
+      # (same posture as the app containers' internal network): Prometheus
+      # reaches it on the compose network; the local Grafana UI is the window
+      # for a human.
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_PATH: ${METRICS_PATH:-/metrics}
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+      WORKER_METRICS_PORT: ${WORKER_METRICS_PORT:-9464}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../apps/api/src:/app/apps/api/src
+      - ../apps/api/test:/app/apps/api/test
+    healthcheck:
+      # Liveness is served regardless of METRICS_ENABLED (D7(a)), so this
+      # healthcheck and the exposition flag can never disagree.
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:${WORKER_METRICS_PORT:-9464}/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web/Dockerfile
+    environment:
+      PORT: 3001
+      # Browser-side API URL (phase 3 §5.2.6); matches the client default.
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000/api/v1}
+    ports:
+      - "${WEB_PORT:-3001}:3001"
+    volumes:
+      # Phase 14: the shell, components and stylesheets are live code too —
+      # mounting only `app` would silently hide every edit made there.
+      - ../apps/web/app:/app/apps/web/app
+      - ../apps/web/components:/app/apps/web/components
+      - ../apps/web/lib:/app/apps/web/lib
+      - ../apps/web/styles:/app/apps/web/styles
+      - ../apps/web/next.config.ts:/app/apps/web/next.config.ts
+      # Phase 15: the embedded API reference loads the canonical contract from
+      # the checkout at build/render time (ADR-0030) — `docs/` is outside
+      # `apps/web`, so it needs its own mount.
+      - ../docs:/app/docs:ro
+
+  # Phase 20 D1/D2/D6: the opt-in monitoring stack (Prometheus + Alertmanager +
+  # Grafana + exporters + a local alert receiver). Everything here is profile-
+  # gated so `docker compose up` and the phase-19 load harness are unchanged
+  # (§7 compose row, §9). Ports bind to 127.0.0.1 only — the stack is for the
+  # developer's browser, never for a network.
+  #   docker compose --profile monitoring up -d
+  # See monitoring/README.md for the runbook.
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v3.13.4
+    # Prometheus does not expand ${VARS} in its config file (verified on
+    # v3.13.4 — it sends the literal text), and compose cannot substitute
+    # inside a mounted file either. The optional scrape token therefore
+    # reaches the config through `credentials_file`: this entrypoint writes it
+    # to a container-local file at start, from the same environment the API
+    # and worker read (empty when unset = network-trust local default). The
+    # file is mode 600, re-read on every scrape, and never committed.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        umask 077
+        printf '%s' "$${METRICS_SCRAPE_TOKEN:-}" > /tmp/brinnpay_scrape_token
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --web.enable-lifecycle
+    environment:
+      METRICS_SCRAPE_TOKEN: ${METRICS_SCRAPE_TOKEN:-}
+    volumes:
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - alertmanager
+      - alert-receiver
+
+  alertmanager:
+    profiles: ["monitoring"]
+    image: prom/alertmanager:v0.34.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ../monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+
+  # Zero-dependency local receiver: prints firing alerts as NDJSON to its
+  # container stdout (`docker compose logs -f alert-receiver`). D6(a)'s
+  # "notification target = local/log" — no SaaS, no human routing.
+  alert-receiver:
+    profiles: ["monitoring"]
+    image: node:22-alpine
+    working_dir: /receiver
+    command: ["node", "alert-receiver.mjs"]
+    environment:
+      PORT: "8080"
+    volumes:
+      - ../monitoring/alert-receiver.mjs:/receiver/alert-receiver.mjs:ro
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:13.2.4
+    environment:
+      # Development-only default (same posture as the compose DB password);
+      # override in the shell for anything shared.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Provisioned datasource + dashboards (AC3: loadable from a clean
+      # checkout with one documented command).
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3002}:3000"
+    depends_on:
+      - prometheus
+
+  # Phase 20 M3: dependency panels (Postgres/Redis reachability) read these
+  # exporters' own metrics — the app process never queries either for them.
+  redis-exporter:
+    profiles: ["monitoring"]
+    image: oliver006/redis_exporter:v1.90.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+
+  postgres-exporter:
+    profiles: ["monitoring"]
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-brinnpay}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER:-brinnpay}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:-brinnpay}
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
