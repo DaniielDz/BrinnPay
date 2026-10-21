@@ -355,17 +355,19 @@
 
 **Goal:** Optimized Docker images for production deployment.
 
-- [ ] Production Dockerfile for API
-- [ ] Production Dockerfile/build strategy for web
-- [ ] Configuration management
-- [ ] Secrets injection
-- [ ] Production runtime validation
+- [x] Production Dockerfile for API
+- [x] Production Dockerfile/build strategy for web
+- [x] Configuration management
+- [x] Secrets injection
+- [x] Production runtime validation
 
 ---
 
 ## Phase 22 — Staging
 
 **Goal:** Automated staging environment mirroring production.
+
+> **Deferred (2026-10-21).** Development pauses at Phase 21 for the portfolio release. The staging specification exists as a draft in [.ai/phases/phase-22-staging.md](.ai/phases/phase-22-staging.md) (decisions D1–D10 and questions Q1–Q6 pending) for a future production-operations stage.
 
 - [ ] Staging environment setup
 - [ ] API deployment
@@ -409,10 +411,11 @@
 
 - [x] README
 - [x] CONTRIBUTING guide
-- [ ] SECURITY policy
+- [x] SECURITY policy
 - [x] LICENSE
-- [ ] Issue templates
-- [ ] PR template
+- [x] Issue templates
+- [x] PR template
+- [x] Dependabot
 - [ ] Architecture documentation
 - [ ] Local development documentation
 - [ ] Public project documentation
