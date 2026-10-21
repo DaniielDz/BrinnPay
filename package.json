@@ -29,6 +29,6 @@
   "packageManager": "pnpm@12.4.1",
   "type": "module",
   "devDependencies": {
-    "@redocly/cli": "^2.62.1"
+    "@redocly/cli": "^2.64.1"
   }
 }
