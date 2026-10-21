@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
     open-pull-requests-limit: 5
     groups:
@@ -17,7 +17,7 @@ updates:
   - package-ecosystem: npm
     directory: "/apps/api"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
     open-pull-requests-limit: 5
     groups:
@@ -28,7 +28,7 @@ updates:
   - package-ecosystem: npm
     directory: "/apps/web"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
     open-pull-requests-limit: 5
     groups:
@@ -39,7 +39,7 @@ updates:
   - package-ecosystem: npm
     directory: "/loadtest"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
     open-pull-requests-limit: 3
     groups:
@@ -50,7 +50,7 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
       day: monday
     open-pull-requests-limit: 3
     groups:
