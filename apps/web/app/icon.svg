@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="BrinnPay">
+  <!-- Favicon (ui-polish D5): typographic "B" monogram, consistent with the
+       D4 wordmark-only brand; self-hosted under the existing CSP (F5). -->
+  <rect width="32" height="32" rx="8" fill="#2f5bd7" />
+  <path fill="#ffffff" d="M10 8h3v16h-3z" />
+  <path fill="#ffffff" d="M13 8h6a4 4 0 0 1 0 8h-6V8z" />
+  <path fill="#ffffff" d="M13 16h7a4 4 0 0 1 0 8h-7v-8z" />
+</svg>

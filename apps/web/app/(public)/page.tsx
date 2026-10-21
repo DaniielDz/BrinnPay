@@ -46,18 +46,20 @@ const CAPABILITIES: { title: string; description: string }[] = [
 ];
 
 /**
- * Public home (phase 14 §4.1): a static, server-rendered statement of what
- * BrinnPay is for a developer evaluating it. It performs no API calls and
- * renders no authenticated material (phase 1 §11.1).
+ * Public home (phase 14 §4.1; ui-polish §4/D1): a static, server-rendered
+ * statement of what BrinnPay is for a developer evaluating it — eyebrow, hero,
+ * capability grid, steps and closing CTA. It performs no API calls and renders
+ * no authenticated material (phase 1 §11.1). The h1, CTA names and targets are
+ * test contracts (F4) and stay unchanged.
  */
 export default function HomePage() {
   return (
     <div className="public-page home-page">
       <section className="hero">
+        <p className="hero-eyebrow">Payment infrastructure sandbox</p>
         <h1>BrinnPay</h1>
         <p className="hero-lead">
-          Payment infrastructure sandbox for developers — realistic payment flows without
-          processing real money.
+          Realistic payment flows for developers — without processing real money.
         </p>
         <div className="cta-row">
           <Link href="/register" className="button button-primary">
