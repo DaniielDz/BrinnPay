@@ -1,40 +1,62 @@
 /**
- * Design tokens (phase 14 §7.1, D1 — plain CSS, defined once).
- * Colors, spacing, typography and radii are consumed by the area stylesheets;
- * nothing here changes accessible names or document structure.
+ * Design tokens (phase 14 §7.1, D1 — plain CSS, defined once; ui-polish §7.1:
+ * refined scales — deeper neutrals, a display type step, an elevation scale and
+ * a full radius family). Colors, spacing, typography and radii are consumed by
+ * the area stylesheets; nothing here changes accessible names or document
+ * structure. All text/background pairs meet WCAG AA in the default theme
+ * (ui-polish §7.1, AC7); D3 keeps the system font stack.
  */
 
 :root {
   /* Color — neutral scale */
-  --color-bg: #f6f7f9;
+  --color-bg: #f3f5f9;
   --color-surface: #ffffff;
-  --color-surface-alt: #f0f2f5;
-  --color-border: #d8dce3;
-  --color-border-strong: #b9c0cb;
+  --color-surface-alt: #f4f6fa;
+  --color-border: #dfe4ec;
+  --color-border-strong: #c3cbd8;
 
   /* Color — text */
-  --color-text: #1c2430;
-  --color-text-muted: #5a6472;
+  --color-text: #17212e;
+  --color-text-muted: #556072;
   --color-text-inverse: #ffffff;
 
   /* Color — brand and status */
   --color-primary: #2f5bd7;
-  --color-primary-hover: #2449b0;
-  --color-primary-soft: #e8eefc;
+  --color-primary-hover: #2549b8;
+  --color-primary-active: #1d3d9e;
+  --color-primary-soft: #e9eefc;
+  --color-primary-border: #c5d3f7;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
+  --color-danger-border: #f3b4af;
   --color-warning: #8a5a00;
   --color-warning-soft: #fdf3e0;
+  --color-warning-border: #ecd19a;
   --color-success: #1f7a44;
   --color-success-soft: #e7f5ed;
+  --color-success-border: #a8d9bf;
   --color-info: #2f5bd7;
   --color-focus: #1a73e8;
 
   /* Environment badges */
-  --color-env-test-bg: #e8eefc;
-  --color-env-test-text: #2449b0;
+  --color-env-test-bg: #e9eefc;
+  --color-env-test-text: #2549b8;
   --color-env-live-bg: #e7f5ed;
   --color-env-live-text: #1f7a44;
+
+  /* Decorative surfaces (CSS-only decoration, Q2) */
+  --gradient-hero: radial-gradient(
+    120% 120% at 100% 0%,
+    var(--color-primary-soft) 0%,
+    transparent 55%
+  );
+  --gradient-cta: linear-gradient(
+    135deg,
+    var(--color-primary-soft) 0%,
+    var(--color-surface) 70%
+  );
+  --color-code-bg: #17212e;
+  --color-code-text: #e8edf5;
 
   /* Spacing scale */
   --space-1: 0.25rem;
@@ -44,8 +66,9 @@
   --space-5: 1.5rem;
   --space-6: 2rem;
   --space-7: 3rem;
+  --space-8: 4rem;
 
-  /* Typography */
+  /* Typography (D3: system stack, hierarchy via scale/weight/spacing) */
   --font-sans:
     system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
@@ -55,16 +78,29 @@
   --font-size-xl: 1.375rem;
   --font-size-2xl: 1.75rem;
   --font-size-3xl: 2.25rem;
-  --line-height: 1.55;
+  --font-size-4xl: 2.75rem;
+  --font-size-5xl: 3.5rem;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height: 1.6;
+  --line-height-tight: 1.2;
+  --letter-spacing-tight: -0.02em;
+  --letter-spacing-wide: 0.06em;
 
   /* Shape */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.08);
-  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.1);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
+  --transition-fast: 140ms ease;
 
   /* Layout */
-  --sidebar-width: 14rem;
-  --content-max-width: 64rem;
+  --sidebar-width: 15rem;
+  --content-max-width: 68rem;
 }

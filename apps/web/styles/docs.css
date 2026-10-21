@@ -46,6 +46,7 @@
   display: block;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
+  border-left: 3px solid transparent;
   color: var(--color-text);
   font-size: var(--font-size-sm);
 }
@@ -57,7 +58,8 @@
 
 .docs-nav a[aria-current='page'] {
   background: var(--color-primary-soft);
-  color: var(--color-primary-hover);
+  border-left-color: var(--color-primary);
+  color: var(--color-primary-active);
   font-weight: 600;
 }
 
@@ -98,9 +100,9 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  padding: var(--space-6);
   margin-bottom: var(--space-6);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
 }
 
 .docs-guide-header h1 {
@@ -144,8 +146,17 @@
 .docs-index-entry {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.docs-index-entry:hover {
+  border-color: var(--color-primary-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .docs-index-entry h3 {
@@ -196,8 +207,8 @@
 .docs-page .docs-base-url {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  background: var(--color-text);
-  color: var(--color-bg);
+  background: var(--color-code-bg);
+  color: var(--color-code-text);
   border-radius: var(--radius-md);
   overflow-x: auto;
   max-width: 100%;
@@ -231,6 +242,7 @@
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-5);
+  box-shadow: var(--shadow-xs);
 }
 
 .docs-callout-title {
@@ -267,8 +279,8 @@
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  padding: 0.1rem 0.4rem;
-  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-full);
   background: var(--color-surface-alt);
   color: var(--color-text);
 }
@@ -412,7 +424,11 @@
 }
 
 .docs-markdown code {
-  white-space: nowrap;
+  /* Short tokens stay on one line; long ones wrap instead of pushing the
+   * page wider than the viewport (ui-polish §10.3/AC8: no horizontal page
+   * scroll at ~360 px — only pre and tables scroll inside their own region). */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,7 +1,8 @@
 /**
- * Base styles shared by every area (phase 14 §7.1): reset, typography scale,
- * focus visibility, and the shared control/state vocabulary (buttons, forms,
- * alerts, badges, tables). Semantic class names already used by the pages are
+ * Base styles shared by every area (phase 14 §7.1; ui-polish §7.1–§7.2):
+ * reset, typography scale, focus visibility, and the shared control/state
+ * vocabulary (buttons, forms, alerts, badges, tables, lists, cards). Semantic
+ * class names already used by the pages — and asserted by tests (F4) — are
  * styled here so page behavior and tests are untouched.
  */
 
@@ -22,6 +23,7 @@ body {
   line-height: var(--line-height);
   color: var(--color-text);
   background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
 }
 
 h1,
@@ -29,7 +31,9 @@ h2,
 h3,
 h4 {
   margin: 0 0 var(--space-3);
-  line-height: 1.25;
+  line-height: var(--line-height-tight);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--letter-spacing-tight);
 }
 
 h1 {
@@ -42,6 +46,11 @@ h2 {
 
 h3 {
   font-size: var(--font-size-lg);
+  letter-spacing: normal;
+}
+
+h4 {
+  letter-spacing: normal;
 }
 
 p {
@@ -71,7 +80,7 @@ a:hover {
 }
 
 strong {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .mono {
@@ -111,6 +120,7 @@ button,
 .button {
   font: inherit;
   font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
   padding: var(--space-2) var(--space-4);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -119,11 +129,18 @@ button,
   cursor: pointer;
   display: inline-block;
   text-align: center;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    color var(--transition-fast);
 }
 
 button:hover:not(:disabled),
 .button:hover {
   background: var(--color-surface-alt);
+  border-color: var(--color-border-strong);
+  text-decoration: none;
 }
 
 button:disabled,
@@ -132,14 +149,31 @@ button:disabled,
   cursor: not-allowed;
 }
 
-.button-primary {
+/*
+ * Primary actions are visually primary everywhere: the `.button-primary`
+ * CTA class and the submit control of every form — the action that form
+ * exists for (§7.2, resolves F6 across public/auth/dashboard). Behavior and
+ * accessible names are untouched; this is presentation only.
+ */
+.button-primary,
+form button[type='submit'] {
   background: var(--color-primary);
   border-color: var(--color-primary);
   color: var(--color-text-inverse);
+  box-shadow: var(--shadow-xs);
+  font-weight: var(--font-weight-semibold);
 }
 
-.button-primary:hover:not(:disabled) {
+.button-primary:hover:not(:disabled),
+form button[type='submit']:hover:not(:disabled) {
   background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.button-primary:active:not(:disabled),
+form button[type='submit']:active:not(:disabled) {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
 }
 
 .button-secondary {
@@ -166,11 +200,11 @@ form {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-5);
   margin: 0 0 var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   align-items: flex-start;
   max-width: 32rem;
 }
@@ -179,7 +213,7 @@ label {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  font-weight: 500;
+  font-weight: var(--font-weight-medium);
   width: 100%;
 }
 
@@ -194,6 +228,12 @@ textarea {
   color: var(--color-text);
   width: 100%;
   max-width: 100%;
+  transition: border-color var(--transition-fast);
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: var(--color-text-muted);
 }
 
 input:disabled,
@@ -207,23 +247,33 @@ select:disabled {
 
 [role='alert'] {
   margin: 0 0 var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--color-danger-soft);
-  border: 1px solid #f2b8b5;
+  border: 1px solid var(--color-danger-border);
   color: var(--color-danger);
 }
 
 .state {
   margin: 0 0 var(--space-4);
-  padding: var(--space-4);
+  padding: var(--space-5);
   border: 1px dashed var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
 }
 
 .state-loading {
   color: var(--color-text-muted);
+  border-style: solid;
+  border-color: var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.state-empty {
+  text-align: center;
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-alt);
+  padding: var(--space-6) var(--space-5);
 }
 
 .state-empty h3,
@@ -231,20 +281,25 @@ select:disabled {
   margin-bottom: var(--space-3);
 }
 
+.state-empty p:last-of-type {
+  margin-bottom: var(--space-4);
+}
+
 .warning {
   background: var(--color-warning-soft);
-  border: 1px solid #e7c98f;
+  border: 1px solid var(--color-warning-border);
   color: var(--color-warning);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
 }
 
 .env-badge {
   display: inline-block;
   font-size: var(--font-size-sm);
-  font-weight: 600;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  padding: 0.1rem var(--space-2);
+  border-radius: var(--radius-full);
   margin-right: var(--space-1);
 }
 
@@ -261,9 +316,9 @@ select:disabled {
 .payment-status {
   display: inline-block;
   font-size: var(--font-size-sm);
-  font-weight: 600;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
+  font-weight: var(--font-weight-semibold);
+  padding: 0.1rem var(--space-2);
+  border-radius: var(--radius-full);
 }
 
 .payment-status-succeeded {
@@ -307,25 +362,40 @@ table {
   width: 100%;
   background: var(--color-surface);
   font-size: var(--font-size-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
 }
 
 caption {
   text-align: left;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   padding-bottom: var(--space-2);
 }
 
 th,
 td {
   text-align: left;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3);
   border-bottom: 1px solid var(--color-border);
   vertical-align: top;
 }
 
 th {
   background: var(--color-surface-alt);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--color-border-strong);
+  white-space: nowrap;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover td {
+  background: var(--color-surface-alt);
 }
 
 /* ------------------------------------------------------------------ */
@@ -362,10 +432,23 @@ th {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2) var(--space-3);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.item-row:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.item-row > a {
+  font-weight: var(--font-weight-semibold);
 }
 
 .definition-list {
@@ -381,7 +464,7 @@ th {
 }
 
 .definition-list dt {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   min-width: 8rem;
 }
 
@@ -393,7 +476,7 @@ th {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-5);
   box-shadow: var(--shadow-sm);
 }
 
