@@ -7,7 +7,7 @@
 
 BrinnPay es una plataforma de pagos simulados: una API REST y un dashboard desde los que se pueden construir, probar e integrar flujos de pago completos — pagos, reembolsos, webhooks, idempotencia, rate limiting, auditoría y observabilidad — **sin procesar dinero real**.
 
-> **Estado del proyecto:** en desarrollo activo. Las fases 0–20 del roadmap están completadas (specs, implementación, pruebas, revisión de seguridad, rendimiento y observabilidad). **Todavía no hay una release oficial**: todo el desarrollo ocurre en la rama [`develop`](https://github.com/DaniielDz/BrinnPay/tree/develop) y las fases 21–26 (despliegue productivo, open source y release v0.1.0) están pendientes. Consulta [ROADMAP.md](ROADMAP.md).
+> **Estado del proyecto:** las fases 0–21 del roadmap están completadas: producto, pruebas, revisión de seguridad, rendimiento, observabilidad y imágenes Docker de producción. El desarrollo se pausó aquí deliberadamente como proyecto de portfolio; las fases 22–26 (staging, CI/CD avanzado, AWS, open source y release) quedan diferidas para una futura etapa de operación — la spec de staging existe como borrador en [.ai/phases/phase-22-staging.md](.ai/phases/phase-22-staging.md). El código vive en [`develop`](https://github.com/DaniielDz/BrinnPay/tree/develop) y `main` apunta al mismo estado. Consulta [ROADMAP.md](ROADMAP.md).
 
 ---
 
@@ -75,6 +75,7 @@ Está pensado para dos audiencias: desarrolladores que quieren **aprender a cons
 - **Revisión de seguridad** explícita ([docs/security-review.md](docs/security-review.md)): checklist OWASP Top 10, IDOR, aislamiento de tenant y gestión de secretos — aceptada el 2026-10-13 sin hallazgos críticos ni altos.
 - **Rendimiento**: baseline de rendimiento comprometido ([docs/performance-baseline.md](docs/performance-baseline.md)) y escenarios de carga k6 (S1–S8).
 - **Observabilidad**: métricas Prometheus propias en API y worker, tres dashboards de Grafana (API, worker, infraestructura) y cuatro reglas de alerta con Alertmanager.
+- **Imágenes de producción**: Dockerfiles multi-stage para API/worker y web (base fijada, non-root, dependencias solo de producción), contrato de configuración y secretos por proceso, y procedimiento de validación runtime ([docker/](docker/)).
 
 ## Stack tecnológico
 
@@ -118,7 +119,7 @@ Monolito modular con un worker en proceso aparte:
                               Redis (BullMQ)
 ```
 
-Decisiones clave documentadas como ADRs en [`.ai/decisions/`](.ai/decisions/) (42 hasta la fecha): estrategia de IDs (UUIDv7), hashing de API keys, modelo de entrega de webhooks, retención de idempotencia, arquitectura de métricas, política de alertas, cobertura mínima, entre otras.
+Decisiones clave documentadas como ADRs en [`.ai/decisions/`](.ai/decisions/) (47 hasta la fecha): estrategia de IDs (UUIDv7), hashing de API keys, modelo de entrega de webhooks, retención de idempotencia, arquitectura de métricas, política de alertas, cobertura mínima, estrategia de build de imágenes de producción, modelo de configuración y secretos en runtime, entre otras.
 
 ## Requisitos
 
@@ -277,8 +278,8 @@ Batería k6 con escenarios S1–S8 (lecturas, escrituras, picos, idempotencia, w
 BrinnPay se construye con un flujo spec-first en el que las decisiones se toman antes que el código:
 
 1. **Especificación maestra**: [`.ai/SPEC.md`](.ai/SPEC.md) define producto, alcance MVP y arquitectura.
-2. **Specs por fase**: [`.ai/phases/`](.ai/phases/) (20 fases) con decisiones numeradas (`D1…Dn`) y preguntas abiertas (`Q1…Qn`) que deben resolverse antes de implementar.
-3. **ADRs**: [`.ai/decisions/`](.ai/decisions/) (42) registran cada decisión técnica ratificada.
+2. **Specs por fase**: [`.ai/phases/`](.ai/phases/) (22 fases) con decisiones numeradas (`D1…Dn`) y preguntas abiertas (`Q1…Qn`) que deben resolverse antes de implementar.
+3. **ADRs**: [`.ai/decisions/`](.ai/decisions/) (47) registran cada decisión técnica ratificada.
 4. **Implementación por fase**: una fase = una rama = un PR, con los checks obligatorios (`AGENTS.md`: lint, typecheck, pruebas y build).
 5. **Revisión por separado**: revisión de código, revisión de seguridad y preparación de PR/commits con reglas explícitas.
 
@@ -292,7 +293,7 @@ BrinnPay/
 │   ├── api/                 # NestJS: API REST, worker BullMQ, prisma/, test/
 │   └── web/                 # Next.js: sitio público, docs y dashboard
 ├── docs/                    # Contrato OpenAPI y documentación de diseño
-├── docker/                  # Compose local (postgres, redis, api, web)
+├── docker/                  # Compose local + Dockerfiles/compose de producción
 ├── monitoring/              # Prometheus, Grafana, Alertmanager, alertas
 ├── loadtest/                # Harness de carga k6 (S1–S8)
 ├── .ai/                     # SPEC.md, specs de fase y ADRs
@@ -315,14 +316,22 @@ BrinnPay/
 | Web, docs y sandbox | 14–16 | Completadas |
 | Calidad: pruebas, seguridad, rendimiento | 17–19 | Completadas |
 | Observabilidad | 20 | Completada |
-| Producción: Docker productivo, staging, CI/CD, AWS | 21–24 | Pendientes |
-| Open source y release | 25–26 | En curso / pendientes |
+| Docker productivo | 21 | Completada |
+| Operación: staging, CI/CD avanzado, AWS | 22–24 | Diferidas (spec de staging como borrador) |
+| Open source | 25 | Parcial (LICENSE, README, CONTRIBUTING, SECURITY) |
+| Release v0.1.0 | 26 | Diferida |
 
 Ideas posteriores al MVP (SDKs, CLI, billing, self-hosting…) están en la sección `## Future` del roadmap.
 
 ## Contribuir
 
-Aún no hay una release ni un CONTRIBUTING maduro: el proyecto está en fase de desarrollo. Si quieres probarlo, reportar un problema o colaborar, revisa [CONTRIBUTING.md](CONTRIBUTING.md) y abre un issue o un PR contra `develop`. Las contribuciones se aceptan bajo los términos de la licencia.
+Si quieres probar el proyecto, reportar un problema o colaborar:
+
+- Lee [CONTRIBUTING.md](CONTRIBUTING.md): ramas, convención de commits y checks obligatorios.
+- Abre un issue o un PR contra `develop` usando las plantillas del repo.
+- Para vulnerabilidades, usa el canal privado descrito en [SECURITY.md](SECURITY.md) (no abras issues públicos).
+
+Las contribuciones se aceptan bajo los términos de la licencia.
 
 ## Aviso importante
 
