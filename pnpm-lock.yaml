@@ -201,13 +201,13 @@ importers:
         version: 11.4.7(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.2.7)(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)
       '@nestjs/terminus':
         specifier: ^11.1.1
-        version: 11.1.1(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.2.7)(@prisma/client@7.10.0(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3))(reflect-metadata@0.2.2)(rxjs@7.8.2)
+        version: 11.1.1(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.2.7)(@prisma/client@7.10.1(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@prisma/adapter-pg':
         specifier: ^7.10.0
         version: 7.10.0
       '@prisma/client':
-        specifier: ^7.10.0
-        version: 7.10.0(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)
+        specifier: ^7.10.1
+        version: 7.10.1(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)
       '@prometheus-io/client':
         specifier: 0.16.1
         version: 0.16.1
@@ -331,7 +331,7 @@ importers:
     dependencies:
       next:
         specifier: ^15.5.27
-        version: 15.5.27(@babel/core@7.29.7(supports-color@8.1.1))(@playwright/test@1.64.0)(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 15.5.27(@babel/core@7.29.7(supports-color@8.1.1))(@opentelemetry/api@1.9.1)(@playwright/test@1.64.0)(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -1633,11 +1633,11 @@ packages:
   '@prisma/adapter-pg@7.10.0':
     resolution: {integrity: sha512-N7nwSor0HO1Kz6xBv0TPAjAPysKK0fac6p4fVN3ensLOuzc/83Fgmln5k92eK/cvzqdkSR/2kkAqlbcdwVrwpw==}
 
-  '@prisma/client-runtime-utils@7.10.0':
-    resolution: {integrity: sha512-cnCy7lUV8/CctgKVEmqAbSLAmwqJdE/qAlqTBk/0NDk59zEb2cZ0M0M0E4vVPnqbSEYudRroQDvOWfUZH6RIfw==}
+  '@prisma/client-runtime-utils@7.10.1':
+    resolution: {integrity: sha512-AzoATVIgmO3lcZfM443+9SI7+cyLMW2+Psw4op8WQHpHvHCX//CKxv8fwhiL0yGWF8DjdQrFewxrZo5McBdB8g==}
 
-  '@prisma/client@7.10.0':
-    resolution: {integrity: sha512-Ubw/QS9JGIBSBUsyxAUQuK/Jcu0Tsva7le7QbLd91Kix9yJvYDdj5QkwgEbbZniH80dd+sziQcALPc+HnvQC8Q==}
+  '@prisma/client@7.10.1':
+    resolution: {integrity: sha512-5tgAbFGh//zVOC6WPNVgziOErJHYkUE+wmqCwbIyq6IrTXUYtv9y2iBFGh/Owo99Mx0+cr0j1FOrxkYBMuyhaQ==}
     engines: {node: ^20.19 || ^22.12 || >=24.0}
     peerDependencies:
       prisma: '*'
@@ -6352,7 +6352,7 @@ snapshots:
       class-transformer: 0.5.1
       class-validator: 0.14.4
 
-  '@nestjs/terminus@11.1.1(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.2.7)(@prisma/client@7.10.0(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3))(reflect-metadata@0.2.2)(rxjs@7.8.2)':
+  '@nestjs/terminus@11.1.1(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.2.7)(@prisma/client@7.10.1(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3))(reflect-metadata@0.2.2)(rxjs@7.8.2)':
     dependencies:
       '@nestjs/common': 11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1)
       '@nestjs/core': 11.2.7(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/platform-express@11.2.7)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -6361,7 +6361,7 @@ snapshots:
       reflect-metadata: 0.2.2
       rxjs: 7.8.2
     optionalDependencies:
-      '@prisma/client': 7.10.0(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)
+      '@prisma/client': 7.10.1(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)
 
   '@nestjs/testing@11.2.7(@nestjs/common@11.2.7(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@8.1.1))(@nestjs/core@11.2.7)(@nestjs/platform-express@11.2.7)':
     dependencies:
@@ -6425,11 +6425,11 @@ snapshots:
     transitivePeerDependencies:
       - pg-native
 
-  '@prisma/client-runtime-utils@7.10.0': {}
+  '@prisma/client-runtime-utils@7.10.1': {}
 
-  '@prisma/client@7.10.0(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)':
+  '@prisma/client@7.10.1(prisma@7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
-      '@prisma/client-runtime-utils': 7.10.0
+      '@prisma/client-runtime-utils': 7.10.1
     optionalDependencies:
       prisma: 7.10.0(@types/node@22.20.5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(magicast@0.3.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@5.9.3)
       typescript: 5.9.3
@@ -9148,7 +9148,7 @@ snapshots:
       pino-http: 11.0.0
       rxjs: 7.8.2
 
-  next@15.5.27(@babel/core@7.29.7(supports-color@8.1.1))(@playwright/test@1.64.0)(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
+  next@15.5.27(@babel/core@7.29.7(supports-color@8.1.1))(@opentelemetry/api@1.9.1)(@playwright/test@1.64.0)(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
     dependencies:
       '@next/env': 15.5.27
       '@swc/helpers': 0.5.15
@@ -9166,6 +9166,7 @@ snapshots:
       '@next/swc-linux-x64-musl': 15.5.27
       '@next/swc-win32-arm64-msvc': 15.5.27
       '@next/swc-win32-x64-msvc': 15.5.27
+      '@opentelemetry/api': 1.9.1
       '@playwright/test': 1.64.0
       sharp: 0.35.5(@types/node@22.20.5)
     transitivePeerDependencies:
