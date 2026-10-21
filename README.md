@@ -1,4 +1,4 @@
-[![CI](https://github.com/DaniielDz/BrinnPay/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/DaniielDz/BrinnPay/actions/workflows/ci.yml)
+[![CI](https://github.com/DaniielDz/BrinnPay/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DaniielDz/BrinnPay/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 # BrinnPay
@@ -7,7 +7,7 @@
 
 BrinnPay es una plataforma de pagos simulados: una API REST y un dashboard desde los que se pueden construir, probar e integrar flujos de pago completos — pagos, reembolsos, webhooks, idempotencia, rate limiting, auditoría y observabilidad — **sin procesar dinero real**.
 
-> **Estado del proyecto:** las fases 0–21 del roadmap están completadas: producto, pruebas, revisión de seguridad, rendimiento, observabilidad y imágenes Docker de producción. El desarrollo se pausó aquí deliberadamente como proyecto de portfolio; las fases 22–26 (staging, CI/CD avanzado, AWS, open source y release) quedan diferidas para una futura etapa de operación — la spec de staging existe como borrador en [.ai/phases/phase-22-staging.md](.ai/phases/phase-22-staging.md). El código vive en [`develop`](https://github.com/DaniielDz/BrinnPay/tree/develop) y `main` apunta al mismo estado. Consulta [ROADMAP.md](ROADMAP.md).
+> **Estado del proyecto:** las fases 0–21 del roadmap están completadas: producto, pruebas, revisión de seguridad, rendimiento, observabilidad y imágenes Docker de producción. El desarrollo se pausó aquí deliberadamente como proyecto de portfolio; las fases 22–26 (staging, CI/CD avanzado, AWS, open source y release) quedan diferidas para una futura etapa de operación — la spec de staging existe como borrador en [.ai/phases/phase-22-staging.md](.ai/phases/phase-22-staging.md). La rama principal es [`main`](https://github.com/DaniielDz/BrinnPay/tree/main) (estado release, tag `v0.1.0`) y `develop` concentra el trabajo activo. Consulta [ROADMAP.md](ROADMAP.md).
 
 ---
 
