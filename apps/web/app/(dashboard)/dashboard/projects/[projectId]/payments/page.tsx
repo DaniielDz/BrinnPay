@@ -377,9 +377,9 @@ export default function ProjectPaymentsPage() {
 
       <h2>Payments</h2>
       {payments.length === 0 ? <p className="state">No payments in {selectedEnvironment.toUpperCase()} yet.</p> : null}
-      <ul>
+      <ul className="item-list">
         {payments.map((payment) => (
-          <li key={payment.id}>
+          <li key={payment.id} className="item-row">
             <span className={`payment-status payment-status-${payment.status}`}>{payment.status}</span>{' '}
             {payment.status === 'failed' && payment.failure_code !== null ? (
               <span className="payment-failure-code">{payment.failure_code}</span>

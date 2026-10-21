@@ -1,8 +1,9 @@
 /**
- * Public area (phase 14 §4, §7.1): header, navigation with authentication CTAs,
- * hero, capability grid, steps and footer. Responsive from small mobile widths
- * to desktop without horizontal scrolling; links and headings keep their
- * accessible names — this file only changes presentation.
+ * Public area (phase 14 §4, §7.1; ui-polish §4): header, navigation with
+ * authentication CTAs, hero, capability grid, steps and footer. Responsive from
+ * small mobile widths to desktop without horizontal scrolling; links and
+ * headings keep their accessible names — this file only changes presentation.
+ * Decoration is CSS-only (Q2: gradients/borders/type, no external assets).
  */
 
 .public-layout {
@@ -18,14 +19,16 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-4) var(--space-6);
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
 
+/* D4: typographic wordmark treatment — no invented graphic logo. */
 .brand {
-  font-weight: 700;
-  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-xl);
+  letter-spacing: var(--letter-spacing-tight);
   color: var(--color-text);
 }
 
@@ -38,7 +41,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-5);
 }
 
 .public-nav,
@@ -46,14 +49,23 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.public-header nav a {
+.public-nav a,
+.public-nav-auth a:not(.button) {
   color: var(--color-text);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.public-nav a:hover,
+.public-nav-auth a:not(.button):hover {
+  background: var(--color-surface-alt);
+  text-decoration: none;
 }
 
 .public-header nav .button-primary {
@@ -65,37 +77,71 @@
   width: 100%;
   max-width: var(--content-max-width);
   margin: 0 auto;
-  padding: var(--space-6) var(--space-5);
+  padding: var(--space-7) var(--space-6);
 }
 
 .public-page section {
-  margin-bottom: var(--space-7);
+  margin-bottom: var(--space-8);
 }
 
+/* ------------------------------------------------------------------ */
+/* Hero                                                                */
+/* ------------------------------------------------------------------ */
+
 .hero {
-  background: var(--color-surface);
+  position: relative;
+  background:
+    var(--gradient-hero),
+    var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  padding: var(--space-7) var(--space-6);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.hero-eyebrow {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-primary);
+  margin-bottom: var(--space-2);
 }
 
 .hero h1 {
-  font-size: var(--font-size-3xl);
+  font-size: clamp(var(--font-size-3xl), 6vw, var(--font-size-5xl));
+  margin-bottom: var(--space-4);
 }
 
 .hero-lead {
   font-size: var(--font-size-lg);
-  color: var(--color-text);
+  line-height: var(--line-height);
+  color: var(--color-text-muted);
   max-width: 46rem;
+  margin-bottom: 0;
 }
 
 .cta-row {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
-  margin-top: var(--space-4);
+  margin-top: var(--space-5);
 }
+
+/* Visually dominant primary action (§4). */
+.hero .button {
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+}
+
+.hero .button-primary {
+  box-shadow: var(--shadow-md);
+}
+
+/* ------------------------------------------------------------------ */
+/* Capability grid and steps                                          */
+/* ------------------------------------------------------------------ */
 
 .capability-grid {
   list-style: none;
@@ -107,11 +153,32 @@
 }
 
 .capability-card {
+  position: relative;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-5);
   box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+/* Subtle brand accent on top of each card (CSS-only, decorative). */
+.capability-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-primary-soft) 100%);
+}
+
+.capability-card:hover {
+  border-color: var(--color-primary-border);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .capability-card h3 {
@@ -121,30 +188,73 @@
 .capability-card p {
   margin: 0;
   color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
 }
 
 .steps {
+  counter-reset: step;
+  list-style: none;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+  padding: var(--space-5) var(--space-5) var(--space-4) var(--space-6);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 0;
 }
 
 .steps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: var(--space-7);
+  margin-bottom: var(--space-4);
+}
+
+.steps li:last-child {
   margin-bottom: var(--space-3);
 }
 
-.cta-section {
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
   background: var(--color-primary-soft);
-  border: 1px solid #c6d4f8;
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  color: var(--color-primary-hover);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.public-page .steps + p {
+  margin-top: var(--space-4);
+  color: var(--color-text-muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* Closing CTA and footer                                             */
+/* ------------------------------------------------------------------ */
+
+.cta-section {
+  background: var(--gradient-cta);
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-sm);
+}
+
+.cta-section .button-primary {
+  box-shadow: var(--shadow-sm);
 }
 
 .public-footer {
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
-  padding: var(--space-5);
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -160,8 +270,17 @@
   padding: 0;
 }
 
+.public-footer nav a {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.public-footer nav a:hover {
+  color: var(--color-primary);
+}
+
 .footer-identity {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   margin: 0;
 }
 
@@ -174,22 +293,40 @@
 /* Small screens: keep everything in flow, no horizontal scrolling. */
 @media (max-width: 40rem) {
   .public-header {
-    padding: var(--space-3);
+    padding: var(--space-3) var(--space-4);
   }
 
   .public-layout main {
     padding: var(--space-5) var(--space-3);
   }
 
+  .public-page section {
+    margin-bottom: var(--space-7);
+  }
+
   .hero {
-    padding: var(--space-4);
+    padding: var(--space-5) var(--space-4);
+    border-radius: var(--radius-lg);
   }
 
   .hero h1 {
-    font-size: var(--font-size-2xl);
+    font-size: var(--font-size-3xl);
+  }
+
+  .cta-section {
+    padding: var(--space-5) var(--space-4);
+    border-radius: var(--radius-lg);
   }
 
   .cta-row .button {
     width: 100%;
+  }
+
+  .steps {
+    padding: var(--space-4);
+  }
+
+  .steps li {
+    padding-left: var(--space-6);
   }
 }
