@@ -4,7 +4,8 @@
 # reload. node_modules is installed inside the image (the host mount overlaps
 # only the source directories, not the workspace dependencies).
 
-FROM node:22-bookworm-slim
+# Patch-pinned for CVE-2026-111497 (Node2Shell, Brotli RCE) — fixed in 22.23.4.
+FROM node:22.23.4-bookworm-slim
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH

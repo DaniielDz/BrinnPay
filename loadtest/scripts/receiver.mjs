@@ -1,7 +1,7 @@
 /**
  * Local webhook receiver for phase 19 load runs (D1).
  *
- * Runs as a throwaway `node:22-alpine` container on the load-test compose
+ * Runs as a throwaway `node:22.23.4-alpine` container on the load-test compose
  * network (started by `scripts/run.mjs`), registered as the webhook
  * destination for every endpoint the seeder creates:
  *

@@ -2,7 +2,8 @@
 #
 # Runs `next dev` with the source mounted from the host for hot reload.
 
-FROM node:22-bookworm-slim
+# Patch-pinned for CVE-2026-111497 (Node2Shell, Brotli RCE) — fixed in 22.23.4.
+FROM node:22.23.4-bookworm-slim
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=/pnpm:$PATH
