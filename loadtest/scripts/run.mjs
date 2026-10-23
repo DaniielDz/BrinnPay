@@ -12,7 +12,7 @@
  *
  * What it does, in order:
  *
- *  1. preflight (docker, pinned images: grafana/k6:2.3.0, node:22-alpine);
+ *  1. preflight (docker, pinned images: grafana/k6:2.3.0, node:22.23.4-alpine);
  *  2. brings up a **dedicated compose project** (`brinnpay-loadtest`) on its
  *     own ports (3100/5543/6380/3201) with documented rate-limit overrides
  *     for the load stack — AC7: configuration of the local stack, catalog
@@ -50,7 +50,7 @@ const STATE_PATH = path.join(LOADTEST_DIR, '.state', 'state.json');
 const COMPOSE_PROJECT = process.env.LOADTEST_COMPOSE_PROJECT ?? 'brinnpay-loadtest';
 const NETWORK = `${COMPOSE_PROJECT}_default`;
 const K6_IMAGE = 'grafana/k6:2.3.0';
-const NODE_IMAGE = 'node:22-alpine';
+const NODE_IMAGE = 'node:22.23.4-alpine';
 
 /** Load-stack ports — dedicated so a dev stack may keep running alongside. */
 const PORTS = { api: '3100', postgres: '5543', redis: '6380', web: '3201' };

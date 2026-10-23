@@ -150,7 +150,7 @@ docker/
   `dist/src/main.js` and `dist/src/worker.js`), production `node_modules`,
   and `docs/openapi.yaml` — no TypeScript sources, no dev toolchain
   (`tsc`/`nest`/`jest`/`eslint`), no secrets. Non-root (`node`, uid 1000),
-  pinned `node:22-bookworm-slim`, `NODE_ENV=production`.
+  pinned `node:22.23.4-bookworm-slim`, `NODE_ENV=production`.
 
   ```sh
   docker build -f docker/api/Dockerfile.prod -t brinnpay/api:local .

@@ -189,7 +189,7 @@ describe('production Docker artifacts (Phase 21)', () => {
       expect(bases.length).toBeGreaterThanOrEqual(3);
       for (const base of bases) {
         expect(base).not.toContain(':latest');
-        expect(base).toMatch(/^node:22-bookworm-slim( AS \w+)?$/);
+        expect(base).toMatch(/^node:22\.23\.4-bookworm-slim( AS \w+)?$/);
       }
     });
 
@@ -231,7 +231,7 @@ describe('production Docker artifacts (Phase 21)', () => {
       expect(bases.length).toBeGreaterThanOrEqual(2);
       for (const base of bases) {
         expect(base).not.toContain(':latest');
-        expect(base).toMatch(/^node:22-bookworm-slim( AS \w+)?$/);
+        expect(base).toMatch(/^node:22\.23\.4-bookworm-slim( AS \w+)?$/);
       }
       expect(dockerfile).toMatch(/^USER node$/m);
     });

@@ -252,7 +252,7 @@ services:
   # "notification target = local/log" — no SaaS, no human routing.
   alert-receiver:
     profiles: ["monitoring"]
-    image: node:22-alpine
+    image: node:22.23.4-alpine # CVE-2026-111497 patch pin
     working_dir: /receiver
     command: ["node", "alert-receiver.mjs"]
     environment:
